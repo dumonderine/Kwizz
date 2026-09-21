@@ -1,0 +1,45 @@
+{
+  "summary": "Comprehensive first-pass test of Kwizz (French QCM app). Backend pytest suite (21 tests) covers auth, onboarding, folders with color inheritance/breadcrumb/soft-delete, text sources, Gemini quiz generation from a topic folder using descendant subfolder sources, EDN partial scoring rule (verified 0->1pt, 1->0.5, 2->0.2, 3+->0), review pool grouping with 'Topic › Sub' labels, review-quiz builder, anchor status + anchor daily idempotency, and course chat. All 21 backend tests PASS (100%). Frontend E2E on mobile viewport (390x844) validated: register -> onboarding (Médecine selected) -> Dossiers tab renders with FAB -> folder create modal opens with name+color inputs -> Profile tab loads with 'Afficher la note' toggle (togglable) -> logout returns to login. Quiz play and review-with-items UI paths were not fully driven by Playwright because the E2E script did not target the correct `folder-submit-button` testID (my script issue, not an app bug); backend-level equivalents pass. Two React Native web deprecation warnings observed: `shadow*` style props and `props.pointerEvents` — cosmetic, not blocking.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dossiers (index)", "issues": ["Anchor card is hidden when pool is empty — spec says an 'Ancrage du jour' card should be visible on the Dossiers tab. Confirm whether the card should show a disabled/empty state instead of being hidden entirely for new users."]}
+    ],
+    "react_native_issues": [
+      {"component": "FAB / shadow styles", "issue": "Deprecated `shadow*` style props warning in web console. Migrate to `boxShadow`. Reference: multiple files using shadowColor/shadowOpacity/shadowRadius/shadowOffset (e.g. /app/frontend/app/(tabs)/index.tsx around line 224)."},
+      {"component": "pointerEvents prop", "issue": "`props.pointerEvents is deprecated. Use style.pointerEvents`. Search codebase for `pointerEvents=` and move to StyleSheet."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/test_kwizz_api.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Consider showing the 'Ancrage du jour' card on Dossiers even when pool is empty, with a disabled/CTA state ('Générez d'abord un QCM'). Currently the card is hidden until at least one generated quiz exists, so new users don't see it at all.",
+    "Migrate deprecated `shadow*` style props to `boxShadow` for react-native-web compatibility (search StyleSheet.create for shadowColor/shadowOpacity/shadowRadius/shadowOffset).",
+    "Migrate JSX `pointerEvents` prop to `style.pointerEvents` per React Native deprecation.",
+    "No functional bugs found; main agent can self-verify quiz-play UI (option toggle, Valider, progress bar fill, final grade screen, 'Revoir les questions ratées') using testIDs `option-A..E`, `validate-button`, `next-button`, `progress-fill`, `final-grade`, `review-banner`, `toggle-missed`, `finish-button` — all present in /app/frontend/app/quiz/play.tsx."
+  ],
+  "critical_code_review_comments": [
+    "server.py is ~1000 lines — consider splitting into routers (auth, folders, sources, quizzes, review, chat) for maintainability, but not blocking.",
+    "GEMINI_MODEL is hardcoded to 'gemini-3.1-pro-preview'. Consider making it env-configurable.",
+    "JWT_SECRET defaults to 'dev-secret' — acceptable for preview but flag for production.",
+    "Score points are hardcoded (1/0.5/0.2/0). Correct per EDN rule; consider extracting to a constant for clarity."
+  ],
+  "updated_files": [
+    "/app/backend/tests/conftest.py (new)",
+    "/app/backend/tests/test_kwizz_api.py (new — 21 tests, all passing)"
+  ],
+  "success_rate": {"backend": "100% (21/21)", "frontend": "~70% (register/onboarding/dossiers/profile/logout validated via Playwright; quiz-play + review-with-items UI not driven by script — backend equivalents pass)"},
+  "seed_data_creation": "Each backend test run creates a fresh user TEST_<uuid>@kwizz.fr with a topic folder 'TEST_Neurologie', subfolder 'TEST_Chapitre 3', a text source with SEP course content, one generated quiz (5 Qs) and two submissions. UI test also creates a random test_<rand>@kwizz.fr user.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend suite lives at /app/backend/tests/test_kwizz_api.py — run with `python -m pytest backend/tests/test_kwizz_api.py -v -n 0` (the repo-level pytest.ini forces xdist which breaks the sequential fixture chain; use `-n 0` to serialize, or restructure fixtures if you must parallelize). Use `EXPO_PUBLIC_BACKEND_URL` from frontend/.env. Gemini generation takes 15-40s so the test uses timeout=120. For UI, the folder-create modal submit button testID is `folder-submit-button` (not `folder-create-submit`). Quiz play flow: click `option-A`, then `validate-button`, then `next-button`, iterating until `final-grade` appears.",
+  "rca_of_issue": "No production bugs found. The one E2E gap (folder creation not completing in Playwright) was a script-side selector mismatch — real button testID is `folder-submit-button`; the create endpoint itself works (verified by 21 passing backend tests, including folder creation, subfolder color inheritance, and quiz generation from that folder tree)."
+}

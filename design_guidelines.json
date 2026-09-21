@@ -1,0 +1,176 @@
+{
+  "app_name": "EDN Prep",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "Sobre, médical, et lisible : l'interface s'efface pour laisser la place à la concentration et à l'apprentissage (bleus/gris avec contrastes clairs pour la correction).",
+  "color": {
+    "surface": "#ffffff",
+    "onSurface": "#0f172a",
+    "surfaceSecondary": "#f8fafc",
+    "onSurfaceSecondary": "#334155",
+    "surfaceTertiary": "#f1f5f9",
+    "onSurfaceTertiary": "#475569",
+    "surfaceInverse": "#0f172a",
+    "onSurfaceInverse": "#ffffff",
+    "brand": "#0284c7",
+    "brandPrimary": "#0284c7",
+    "onBrandPrimary": "#ffffff",
+    "brandSecondary": "#1e293b",
+    "onBrandSecondary": "#ffffff",
+    "brandTertiary": "#e0f2fe",
+    "onBrandTertiary": "#0369a1",
+    "success": "#16a34a",
+    "onSuccess": "#ffffff",
+    "warning": "#d97706",
+    "onWarning": "#ffffff",
+    "error": "#dc2626",
+    "onError": "#ffffff",
+    "info": "#0ea5e9",
+    "onInfo": "#ffffff",
+    "border": "#e2e8f0",
+    "borderStrong": "#cbd5e1",
+    "divider": "#f1f5f9",
+    "muted": "#64748b",
+    "onBrand": "#ffffff"
+  },
+  "typography": {
+    "displayFontFamily": "Plus Jakarta Sans",
+    "textFontFamily": "Plus Jakarta Sans",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Handle spacing correctly dont have extra spaces where its not required, handle padding and margin corectly and subtle for buttons and components",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": 1,
+  "navigation": "bottom_tabs",
+  "icon_set": "Ionicons",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Use glassmorphism for the sticky 'Valider' CTA container at the bottom of the QCM player.",
+      "Use glassmorphism for the bottom tab bar.",
+      "Use glass on sticky headers over scrolling content (e.g., Folder lists, QCM questions)."
+    ],
+    "dont's": [
+      "Never blur body text regions or form fields.",
+      "Do not blur QCM answer cards (they must remain solid surfaceSecondary for readability)."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Home (Dossiers)",
+      "purpose": "Browser for medical topics (Neurology, Cardiology, etc.) and global QCM metrics.",
+      "states": {
+        "loading": "Centered spinner over subtle grid.",
+        "empty": "Illustration of an empty desk/papers, text 'Aucun dossier. Créez votre première matière.', primary CTA 'Nouveau dossier'.",
+        "error": "Message 'Erreur de chargement des dossiers' with 'Réessayer' button."
+      },
+      "layout": "Grid of folders using brandTertiary tinted icons. Large header 'Mes Dossiers'. Floating CTA (FAB) for creating a new folder with glass overlay."
+    },
+    {
+      "name": "Folder Detail (Chapitres & Sources)",
+      "purpose": "Shows subfolders, uploaded sources (PDF/Photos/Text), and the entry point to generate/play QCMs.",
+      "states": {
+        "loading": "Skeleton list of sources.",
+        "empty": "Illustration of medical study materials. Text 'Ajoutez vos cours (PDF, photos) pour générer des QCM.', CTA 'Ajouter une source'.",
+        "error": "Message 'Impossible de charger le contenu' with retry."
+      },
+      "layout": "Sticky glass header with folder name (e.g., Neurologie). List of sources (rows with leading icon, title, chevron). Sticky bottom CTA 'Générer un QCM'."
+    },
+    {
+      "name": "QCM Player",
+      "purpose": "Interactive multiple-choice quiz with EDN rules (multi-select, validate to see answers).",
+      "states": {
+        "loading": "Skeleton cards for question options.",
+        "empty": "Not applicable (always shows a generated question or completion).",
+        "error": "Message 'Erreur de génération du QCM' with 'Réessayer'."
+      },
+      "layout": "Top progress bar. Scrollable question text (dense, highly readable). Selectable answer cards (toggling adds borderStrong/brandPrimary outline). Sticky 'Valider' CTA at the bottom in a glass container. Upon validation, cards shift to success/warning/error colors, and an explanation box appears."
+    },
+    {
+      "name": "Session Results",
+      "purpose": "Displays EDN-graded score (0/0.2/0.5/1 pt) and tags questions for review.",
+      "states": {
+        "loading": "Spinner calculating final score.",
+        "empty": "N/A",
+        "error": "Error saving session."
+      },
+      "layout": "Hero metric: final grade (e.g., 14/20). Scrollable list of questions answered imperfectly, marked 'Ajouté aux QCM à revoir'. Sticky primary CTA 'Terminer'."
+    },
+    {
+      "name": "AI Course Chat",
+      "purpose": "Contextual chat to ask follow-up questions about the uploaded sources.",
+      "states": {
+        "loading": "Typing indicator (skeleton bubbles).",
+        "empty": "Chat empty state with suggestion chips ('Explique-moi l'anatomie médullaire').",
+        "error": "Message failed to send icon."
+      },
+      "layout": "Standard chat interface. Messages from AI have a surfaceSecondary background, user messages have brandPrimary background. KeyboardAvoidingView with sticky input field."
+    }
+  ],
+  "images": {
+    "hero_neurology": {
+      "url": "https://images.unsplash.com/photo-1617791160536-598cf32026fb?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzF8MHwxfHNlYXJjaHwxfHxuZXVyb2xvZ3klMjBicmFpbiUyMGFuYXRvbXklMjBtaW5pbWFsfGVufDB8fHx8MTc5MDAyNTk5Mnww&ixlib=rb-4.1.0&q=85",
+      "dark": "https://images.pexels.com/photos/6192331/pexels-photo-6192331.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Abstract minimal render of a brain for neurology topics"
+    },
+    "empty_folder": {
+      "url": "https://images.unsplash.com/photo-1585119192382-71236d43b689?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDJ8MHwxfHNlYXJjaHwxfHxlbXB0eSUyMHN0YXRlJTIwZGVzayUyMHBhcGVycyUyMG1pbmltYWx8ZW58MHx8fHwxNzkwMDI1OTk3fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Blank paper on a wooden desk representing an empty state"
+    },
+    "empty_qcm": {
+      "url": "https://images.pexels.com/photos/37065064/pexels-photo-37065064.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Study materials with skeletal system diagrams"
+    }
+  },
+  "haptics": {
+    "events": {
+      "onSelectAnswer": "selection",
+      "onValidateQCM": "medium",
+      "onCorrectAnswerReveal": "success",
+      "onIncorrectAnswerReveal": "error",
+      "onFolderCreate": "light",
+      "onTabPress": "selection"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Adhere strictly to the iOS-Native Clean layout: generous padding, highly readable text, and clear groupings. For medical content (QCM text), readability is the top priority.",
+    "Implement the EDN specific scoring visual language correctly after clicking 'Valider'. Answers should distinctly show green (success) for correct choices, red (error) for completely incorrect, and amber (warning) for discordant/missed items.",
+    "The 'Valider' button in the QCM player must be sticky at the bottom in a glass container, allowing the potentially long question text to scroll behind it.",
+    "Follow the specific color requests from the user: use the sky-blue/slate (brandPrimary/brandSecondary) palette defined in the JSON. The UI should feel sober, trustworthy, and medical.",
+    "Images provided in the JSON MUST have a gradient scrim (top to bottom, transparent to ≥70% surfaceInverse) if text is rendered on top of them (e.g., if used as a banner for 'Neurologie').",
+    "Never use indigo, violet, or purple defaults. Stick to the defined sky-blue and slate-gray palette.",
+    "Ensure 'QCM à revoir' tagging relies on explicit visual confirmation, perhaps via a toast or distinct icon state when viewing session results.",
+    "Ensure safe area is respected across all screens, specifically pushing the sticky CTA above the home indicator."
+  ]
+}
