@@ -1,14 +1,22 @@
 import { Tabs } from "expo-router";
+import { useEffect } from "react";
 import { Platform, useWindowDimensions } from "react-native";
 import Ionicons from "@react-native-vector-icons/ionicons";
 
 import { usesNativeTabs } from "@/src/navigation";
+import { setupNotificationHandler, syncReminders } from "@/src/notifications";
 import { fonts, useTheme } from "@/src/theme";
 
 export default function TabsLayout() {
   const { colors } = useTheme();
   const { width } = useWindowDimensions();
   const isTablet = width >= 768;
+
+  // Keep device reminders aligned with the server whenever the app opens.
+  useEffect(() => {
+    setupNotificationHandler();
+    syncReminders();
+  }, []);
 
   // On iPad / large screens the navigation lives on the LEFT as a side rail.
   if (usesNativeTabs && !isTablet) {
@@ -22,6 +30,10 @@ export default function TabsLayout() {
         <NativeTabs.Trigger name="review">
           <NativeTabs.Trigger.Icon sf="arrow.clockwise.circle.fill" />
           <NativeTabs.Trigger.Label>À revoir</NativeTabs.Trigger.Label>
+        </NativeTabs.Trigger>
+        <NativeTabs.Trigger name="calendar">
+          <NativeTabs.Trigger.Icon sf="calendar" />
+          <NativeTabs.Trigger.Label>Calendrier</NativeTabs.Trigger.Label>
         </NativeTabs.Trigger>
         <NativeTabs.Trigger name="profile">
           <NativeTabs.Trigger.Icon sf="person.fill" />
@@ -61,6 +73,13 @@ export default function TabsLayout() {
         options={{
           title: "À revoir",
           tabBarIcon: ({ color, size }) => <Ionicons name="refresh-circle" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="calendar"
+        options={{
+          title: "Calendrier",
+          tabBarIcon: ({ color, size }) => <Ionicons name="calendar" size={size} color={color} />,
         }}
       />
       <Tabs.Screen

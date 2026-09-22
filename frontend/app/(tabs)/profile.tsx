@@ -1,18 +1,24 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { Pressable, ScrollView, Switch, Text, View } from "react-native";
+import { useState } from "react";
+import { Modal, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@react-native-vector-icons/ionicons";
 
 import { apiFetch } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { Button } from "@/src/components/button";
+import { DEFAULT_J_OFFSETS, JSeriesPicker, seriesLabel } from "@/src/components/j-series-picker";
 import { useToast } from "@/src/components/toast";
 import { APP_NAME } from "@/src/config";
 import { usesNativeTabs } from "@/src/navigation";
+import { syncReminders } from "@/src/notifications";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
 
 type Attempt = { id: string; title: string; grade_on_20: number; max_points: number; created_at: string };
+
+const HOURS = [7, 8, 9, 12, 18, 20, 21];
+const ANCHOR_SIZES = [10, 20, 30, 40, 60, 80, 100];
 
 function fmt(n: number) {
   return Number.isInteger(n) ? `${n}` : n.toFixed(1).replace(".", ",");
@@ -23,10 +29,35 @@ export default function Profile() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { user, signOut } = useAuth();
-  const { updateProfile } = useAuth();
+  const { user, signOut, updateProfile, refreshUser } = useAuth();
   const toast = useToast();
   const bottomChrome = usesNativeTabs ? insets.bottom : 0;
+  const [showPreset, setShowPreset] = useState(false);
+  const [presetName, setPresetName] = useState("");
+  const [presetOffsets, setPresetOffsets] = useState<number[]>(DEFAULT_J_OFFSETS);
+
+  const patch = (data: Parameters<typeof updateProfile>[0]) =>
+    updateProfile(data).then(
+      () => undefined,
+      (e) => toast.show(e.message, "error"),
+    );
+
+  const addPreset = useMutation({
+    mutationFn: () => apiFetch("/j/presets", { body: { name: presetName.trim() || seriesLabel(presetOffsets), offsets: presetOffsets } }),
+    onSuccess: async () => {
+      await refreshUser();
+      setShowPreset(false);
+      setPresetName("");
+      setPresetOffsets(DEFAULT_J_OFFSETS);
+      toast.show("Série enregistrée", "success");
+    },
+    onError: (e: any) => toast.show(e.message, "error"),
+  });
+
+  const delPreset = useMutation({
+    mutationFn: (pid: string) => apiFetch(`/j/presets/${pid}`, { method: "DELETE" }),
+    onSuccess: () => refreshUser(),
+  });
 
   const { data: attempts } = useQuery({
     queryKey: ["attempts"],
@@ -77,7 +108,7 @@ export default function Profile() {
             <Switch
               testID="toggle-show-grade"
               value={user?.show_grade !== false}
-              onValueChange={(v) => updateProfile({ show_grade: v }).catch((e) => toast.show(e.message, "error"))}
+              onValueChange={(v) => patch({ show_grade: v })}
               trackColor={{ true: colors.brandPrimary, false: colors.borderStrong }}
             />
           </View>
@@ -90,6 +121,98 @@ export default function Profile() {
             <Pressable onPress={() => router.push("/(auth)/onboarding")} testID="change-field" hitSlop={8}>
               <Ionicons name="pencil" size={20} color={colors.brandPrimary} />
             </Pressable>
+          </View>
+        </View>
+
+        <Text style={styles.sectionTitle}>Ancrage du jour</Text>
+        <View style={styles.settingsCard}>
+          <View style={styles.settingRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.settingTitle}>Activer l'Ancrage</Text>
+              <Text style={styles.settingSub}>Carte « Ancrage du jour » sur l'écran Dossiers</Text>
+            </View>
+            <Switch
+              testID="toggle-anchor"
+              value={user?.anchor_enabled !== false}
+              onValueChange={(v) => patch({ anchor_enabled: v })}
+              trackColor={{ true: colors.brandPrimary, false: colors.borderStrong }}
+            />
+          </View>
+          {user?.anchor_enabled !== false ? (
+            <>
+              <View style={styles.settingDivider} />
+              <View style={styles.settingCol}>
+                <Text style={styles.settingTitle}>Nombre de QCM par Ancrage</Text>
+                <Text style={styles.settingSub}>Tirés au hasard automatiquement chaque jour</Text>
+                <View style={styles.chipRow}>
+                  {ANCHOR_SIZES.map((n) => {
+                    const active = (user?.anchor_size ?? 40) === n;
+                    return (
+                      <Pressable
+                        key={n}
+                        style={[styles.chip, active && styles.chipActive]}
+                        onPress={() => patch({ anchor_size: n })}
+                        testID={`anchor-size-${n}`}
+                      >
+                        <Text style={[styles.chipText, active && styles.chipTextActive]}>{n}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+            </>
+          ) : null}
+        </View>
+
+        <Text style={styles.sectionTitle}>Méthode des J</Text>
+        <View style={styles.settingsCard}>
+          <View style={styles.settingCol}>
+            <Text style={styles.settingTitle}>Heure des rappels</Text>
+            <Text style={styles.settingSub}>Notification le jour de chaque J</Text>
+            <View style={styles.chipRow}>
+              {HOURS.map((h) => {
+                const active = (user?.reminder_hour ?? 9) === h;
+                return (
+                  <Pressable
+                    key={h}
+                    style={[styles.chip, active && styles.chipActive]}
+                    onPress={() => patch({ reminder_hour: h }).then(() => syncReminders())}
+                    testID={`reminder-hour-${h}`}
+                  >
+                    <Text style={[styles.chipText, active && styles.chipTextActive]}>{h}h</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+          <View style={styles.settingDivider} />
+          <View style={styles.settingCol}>
+            <View style={{ flexDirection: "row", alignItems: "center" }}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settingTitle}>Mes séries de J</Text>
+                <Text style={styles.settingSub}>Réutilisables sur chaque chapitre</Text>
+              </View>
+              <Pressable onPress={() => setShowPreset(true)} hitSlop={8} testID="add-preset">
+                <Ionicons name="add-circle" size={26} color={colors.brandPrimary} />
+              </Pressable>
+            </View>
+            {user?.j_presets && user.j_presets.length > 0 ? (
+              <View style={{ gap: 8, marginTop: 8 }}>
+                {user.j_presets.map((p) => (
+                  <View key={p.id} style={styles.presetRow} testID={`preset-${p.id}`}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.presetName}>{p.name}</Text>
+                      <Text style={styles.presetOffsets}>{seriesLabel(p.offsets)}</Text>
+                    </View>
+                    <Pressable onPress={() => delPreset.mutate(p.id)} hitSlop={8} testID={`del-preset-${p.id}`}>
+                      <Ionicons name="trash-outline" size={20} color={colors.error} />
+                    </Pressable>
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <Text style={[styles.hint, { marginTop: 8 }]}>Aucune série enregistrée. Par défaut : {seriesLabel(DEFAULT_J_OFFSETS)}</Text>
+            )}
           </View>
         </View>
 
@@ -116,6 +239,33 @@ export default function Profile() {
         <View style={{ height: 8 }} />
         <Button title="Se déconnecter" variant="outline" icon="log-out-outline" onPress={logout} testID="logout-button" />
       </ScrollView>
+
+      <Modal visible={showPreset} transparent animationType="slide" onRequestClose={() => setShowPreset(false)}>
+        <Pressable style={styles.backdrop} onPress={() => setShowPreset(false)} />
+        <View style={styles.sheet}>
+          <View style={styles.handle} />
+          <Text style={styles.sheetTitle}>Nouvelle série de J</Text>
+          <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 12 }}>
+            <TextInput
+              style={styles.input}
+              value={presetName}
+              onChangeText={setPresetName}
+              placeholder="Nom (ex : Ma méthode)"
+              placeholderTextColor={colors.muted}
+              testID="preset-name"
+            />
+            <JSeriesPicker value={presetOffsets} onChange={setPresetOffsets} allowSave={false} />
+            <View style={{ height: 4 }} />
+            <Button
+              title="Enregistrer la série"
+              onPress={() => addPreset.mutate()}
+              loading={addPreset.isPending}
+              disabled={presetOffsets.length === 0}
+              testID="preset-submit"
+            />
+          </ScrollView>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -137,6 +287,20 @@ const useStyles = makeStyles((colors) => ({
   settingTitle: { fontSize: 15, fontFamily: fonts.semibold, color: colors.onSurface },
   settingSub: { fontSize: 13, fontFamily: fonts.regular, color: colors.muted, marginTop: 2 },
   settingDivider: { height: 1, backgroundColor: colors.divider },
+  settingCol: { paddingVertical: 16, gap: 2 },
+  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
+  chip: { minWidth: 48, height: 38, paddingHorizontal: 12, borderRadius: 12, backgroundColor: colors.surfaceTertiary, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.border },
+  chipActive: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+  chipText: { fontSize: 14, fontFamily: fonts.bold, color: colors.onSurfaceSecondary },
+  chipTextActive: { color: colors.onBrandPrimary },
+  presetRow: { flexDirection: "row", alignItems: "center", gap: 12, padding: 12, borderRadius: 12, backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border },
+  presetName: { fontSize: 14, fontFamily: fonts.semibold, color: colors.onSurface },
+  presetOffsets: { fontSize: 12, fontFamily: fonts.regular, color: colors.muted, marginTop: 1 },
+  backdrop: { flex: 1, backgroundColor: "rgba(15,23,42,0.4)" },
+  sheet: { backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 24, paddingTop: 12, paddingBottom: 32, maxHeight: "88%" },
+  handle: { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.borderStrong, alignSelf: "center", marginBottom: 16 },
+  sheetTitle: { fontSize: 20, fontFamily: fonts.extrabold, color: colors.onSurface, marginBottom: 16 },
+  input: { height: 52, borderRadius: 14, backgroundColor: colors.surfaceTertiary, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 16, fontSize: 16, fontFamily: fonts.regular, color: colors.onSurface },
   attemptRow: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: colors.surface, borderRadius: 14, padding: 12, borderWidth: 1, borderColor: colors.border },
   attemptIcon: { width: 40, height: 40, borderRadius: 10, backgroundColor: colors.brandTertiary, alignItems: "center", justifyContent: "center" },
   attemptTitle: { fontSize: 15, fontFamily: fonts.semibold, color: colors.onSurface },

@@ -1,19 +1,23 @@
 import { useEffect, useState } from "react";
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import ColorPicker, { HueSlider, Panel1, Preview } from "reanimated-color-picker";
 import Ionicons from "@react-native-vector-icons/ionicons";
 
 import { Button } from "@/src/components/button";
+import { DEFAULT_J_OFFSETS, JSeriesPicker } from "@/src/components/j-series-picker";
 import { FOLDER_PALETTE } from "@/src/colors";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
+
+export type FolderJConfig = { j_enabled: boolean; j_offsets: number[] };
 
 type Props = {
   visible: boolean;
   onClose: () => void;
-  onSubmit: (name: string, color: string) => Promise<void> | void;
+  onSubmit: (name: string, color: string, j: FolderJConfig) => Promise<void> | void;
   title: string;
   defaultColor: string;
   initialName?: string;
+  initialJ?: { j_enabled?: boolean | null; j_offsets?: number[] | null };
   submitLabel?: string;
 };
 
@@ -24,6 +28,7 @@ export function FolderFormModal({
   title,
   defaultColor,
   initialName = "",
+  initialJ,
   submitLabel = "Créer",
 }: Props) {
   const styles = useStyles();
@@ -32,20 +37,24 @@ export function FolderFormModal({
   const [color, setColor] = useState(defaultColor);
   const [customOpen, setCustomOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [jEnabled, setJEnabled] = useState(initialJ?.j_enabled !== false);
+  const [jOffsets, setJOffsets] = useState<number[]>(initialJ?.j_offsets ?? DEFAULT_J_OFFSETS);
 
   useEffect(() => {
     if (visible) {
       setName(initialName);
       setColor(defaultColor);
       setCustomOpen(false);
+      setJEnabled(initialJ?.j_enabled !== false);
+      setJOffsets(initialJ?.j_offsets ?? DEFAULT_J_OFFSETS);
     }
-  }, [visible, initialName, defaultColor]);
+  }, [visible, initialName, defaultColor, initialJ]);
 
   const submit = async () => {
     if (!name.trim()) return;
     setLoading(true);
     try {
-      await onSubmit(name.trim(), color);
+      await onSubmit(name.trim(), color, { j_enabled: jEnabled, j_offsets: jOffsets });
       onClose();
     } finally {
       setLoading(false);
@@ -119,6 +128,27 @@ export function FolderFormModal({
             </View>
           ) : null}
 
+          <View style={styles.jRow}>
+            <View style={styles.jIcon}>
+              <Ionicons name="alarm-outline" size={20} color={colors.brandPrimary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.jTitle}>Méthode des J</Text>
+              <Text style={styles.jSub}>Rappels J1, J3… à partir du 1er QCM généré</Text>
+            </View>
+            <Switch
+              value={jEnabled}
+              onValueChange={setJEnabled}
+              trackColor={{ true: colors.brandPrimary, false: colors.borderStrong }}
+              testID="folder-j-switch"
+            />
+          </View>
+          {jEnabled ? (
+            <View style={{ marginTop: 12 }}>
+              <JSeriesPicker value={jOffsets} onChange={setJOffsets} />
+            </View>
+          ) : null}
+
           <View style={{ height: 16 }} />
           <Button title={submitLabel} onPress={submit} loading={loading} testID="folder-submit-button" />
         </ScrollView>
@@ -164,4 +194,18 @@ const useStyles = makeStyles((colors) => ({
   preview: { height: 40, borderRadius: 12 },
   panel: { borderRadius: 16, height: 200 },
   hue: { borderRadius: 12 },
+  jRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginTop: 8,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: colors.surfaceSecondary,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  jIcon: { width: 38, height: 38, borderRadius: 10, backgroundColor: colors.brandTertiary, alignItems: "center", justifyContent: "center" },
+  jTitle: { fontSize: 15, fontFamily: fonts.semibold, color: colors.onSurface },
+  jSub: { fontSize: 12, fontFamily: fonts.regular, color: colors.muted, marginTop: 2 },
 }));

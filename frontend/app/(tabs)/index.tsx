@@ -13,8 +13,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@react-native-vector-icons/ionicons";
 
 import { apiFetch } from "@/src/api";
+import { useAuth } from "@/src/auth";
 import { DEFAULT_FOLDER_COLOR, tintBg } from "@/src/colors";
-import { FolderFormModal } from "@/src/components/folder-form-modal";
+import { FolderFormModal, FolderJConfig } from "@/src/components/folder-form-modal";
 import { useToast } from "@/src/components/toast";
 import { usesNativeTabs } from "@/src/navigation";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
@@ -34,7 +35,10 @@ export default function Dossiers() {
   const router = useRouter();
   const toast = useToast();
   const qc = useQueryClient();
+  const { user } = useAuth();
   const [showCreate, setShowCreate] = useState(false);
+  const anchorEnabled = user?.anchor_enabled !== false;
+  const anchorSize = user?.anchor_size ?? 40;
 
   const bottomChrome = usesNativeTabs ? insets.bottom : 0;
 
@@ -49,7 +53,7 @@ export default function Dossiers() {
     onError: (e: any) => toast.show(e.message, "error"),
   });
 
-  const AnchorCard = (
+  const AnchorCard = anchorEnabled ? (
     <Pressable
       testID="anchor-card"
       style={({ pressed }) => [styles.anchorCard, pressed && styles.pressed]}
@@ -64,15 +68,15 @@ export default function Dossiers() {
       </View>
       <View style={{ flex: 1 }}>
         <Text style={styles.anchorTitle}>Ancrage du jour</Text>
-        <Text style={styles.anchorSub}>40 QCM tirés au hasard dans toutes vos matières</Text>
+        <Text style={styles.anchorSub}>{anchorSize} QCM tirés au hasard dans toutes vos matières</Text>
       </View>
       <Ionicons name="play-circle" size={30} color={colors.onBrandSecondary} />
     </Pressable>
-  );
+  ) : null;
 
   const create = useMutation({
-    mutationFn: (vars: { name: string; color: string }) =>
-      apiFetch("/folders", { body: { name: vars.name, color: vars.color } }),
+    mutationFn: (vars: { name: string; color: string; j: FolderJConfig }) =>
+      apiFetch("/folders", { body: { name: vars.name, color: vars.color, ...vars.j } }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["folders", null] });
       toast.show("Dossier créé", "success");
@@ -158,7 +162,7 @@ export default function Dossiers() {
       <FolderFormModal
         visible={showCreate}
         onClose={() => setShowCreate(false)}
-        onSubmit={(name, color) => create.mutateAsync({ name, color })}
+        onSubmit={(name, color, j) => create.mutateAsync({ name, color, j })}
         title="Nouveau dossier"
         defaultColor={DEFAULT_FOLDER_COLOR}
       />

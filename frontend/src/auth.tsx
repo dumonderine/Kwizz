@@ -9,7 +9,19 @@ export type User = {
   name?: string | null;
   study_field?: string | null;
   show_grade: boolean;
+  reminder_hour: number;
+  j_presets: { id: string; name: string; offsets: number[] }[];
+  anchor_enabled: boolean;
+  anchor_size: number;
   onboarded: boolean;
+};
+
+type ProfilePatch = {
+  study_field?: string;
+  show_grade?: boolean;
+  reminder_hour?: number;
+  anchor_enabled?: boolean;
+  anchor_size?: number;
 };
 
 type AuthState = {
@@ -18,7 +30,8 @@ type AuthState = {
   signIn: (email: string, password: string) => Promise<User>;
   signUp: (email: string, password: string, name?: string) => Promise<User>;
   signOut: () => Promise<void>;
-  updateProfile: (data: { study_field?: string; show_grade?: boolean }) => Promise<User>;
+  updateProfile: (data: ProfilePatch) => Promise<User>;
+  refreshUser: () => Promise<User>;
 };
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -68,14 +81,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   };
 
-  const updateProfile = async (data: { study_field?: string; show_grade?: boolean }) => {
+  const updateProfile = async (data: ProfilePatch) => {
     const updated = await apiFetch<User>("/auth/profile", { method: "PATCH", body: data });
     setUser(updated);
     return updated;
   };
 
+  const refreshUser = async () => {
+    const me = await apiFetch<User>("/auth/me");
+    setUser(me);
+    return me;
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, signIn, signUp, signOut, updateProfile }}>
+    <AuthContext.Provider value={{ user, loading, signIn, signUp, signOut, updateProfile, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

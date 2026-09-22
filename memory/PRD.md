@@ -44,6 +44,18 @@ An AI chat lets students ask follow-up questions about the course.
 - Daily Ancrage (40 random, idempotent) — DONE
 - AI course chat (folder-context + quiz-context) — DONE
 - Settings: show/hide grade; graduation-cap logo; tablet left navigation — DONE
+- Méthode des J (spaced reminders): per-folder J config (j_enabled/j_offsets) set at folder create/edit,
+  schedule auto-created at first QCM generation (J0 = that day, editable), reusable J series (presets in
+  Profil + previously used), Calendrier tab (month/week, Apple-style colored rows, day details → folder),
+  local notifications at user-chosen hour (expo-notifications, device build only) — DONE (2026-06)
+- Profil: Ancrage on/off + Ancrage size (10–100); custom QCM count up to 100 at generation — DONE
+
+## Data (added)
+- `users.reminder_hour` (default 9), `users.j_presets[{id,name,offsets}]`, `users.anchor_enabled`, `users.anchor_size`
+- `folders.j_enabled` (None/True/False), `folders.j_offsets`
+- `j_schedules`: {id, owner_id, folder_id, j0 (YYYY-MM-DD), offsets[]}
+- Routes: GET/PUT/DELETE /api/j/schedules/{folder_id}, GET /api/j/schedules, GET /api/j/events?start&end,
+  GET /api/j/upcoming, POST/DELETE /api/j/presets
 
 ## Backlog / next
 - P1: streaming chat responses; markdown rendering in chat/explanations.

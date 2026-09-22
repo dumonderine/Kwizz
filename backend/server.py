@@ -1,5 +1,6 @@
 import os
 import re
+import asyncio
 import json
 import uuid
 import random
@@ -37,7 +38,8 @@ JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret")
 JWT_ALG = "HS256"
 JWT_EXPIRE_DAYS = 30
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY")
-GEMINI_MODEL = "gemini-3.1-pro-preview"
+GEMINI_MODEL = "gemini-3.1-pro-preview"  # chat / explanations
+GEN_MODEL = "gemini-3.5-flash"  # QCM generation: fast, large context, robust JSON
 
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -150,11 +152,26 @@ class FolderIn(BaseModel):
     name: str
     parent_id: Optional[str] = None
     color: Optional[str] = None
+    j_enabled: Optional[bool] = None
+    j_offsets: Optional[List[int]] = None
 
 
 class FolderUpdateIn(BaseModel):
     name: Optional[str] = None
     color: Optional[str] = None
+    j_enabled: Optional[bool] = None
+    j_offsets: Optional[List[int]] = None
+
+
+class JScheduleIn(BaseModel):
+    j0: Optional[str] = None  # YYYY-MM-DD
+    offsets: Optional[List[int]] = None
+    enabled: Optional[bool] = None
+
+
+class JPresetIn(BaseModel):
+    name: str
+    offsets: List[int]
 
 
 class TextSourceIn(BaseModel):
@@ -188,6 +205,21 @@ class ChatIn(BaseModel):
 class ProfileIn(BaseModel):
     study_field: Optional[str] = None
     show_grade: Optional[bool] = None
+    reminder_hour: Optional[int] = Field(default=None, ge=0, le=23)
+    anchor_enabled: Optional[bool] = None
+    anchor_size: Optional[int] = Field(default=None, ge=5, le=100)
+
+
+DEFAULT_J_OFFSETS = [1, 3, 7, 15, 30]
+DEFAULT_REMINDER_HOUR = 9
+DEFAULT_ANCHOR_SIZE = 40
+MAX_QUESTIONS = 100
+
+
+def normalize_offsets(offsets: Optional[List[int]]) -> List[int]:
+    if not offsets:
+        return list(DEFAULT_J_OFFSETS)
+    return sorted({int(o) for o in offsets if 0 < int(o) <= 365})[:30] or list(DEFAULT_J_OFFSETS)
 
 
 def public_user(u: dict) -> dict:
@@ -198,6 +230,10 @@ def public_user(u: dict) -> dict:
         "name": u.get("name"),
         "study_field": field,
         "show_grade": u.get("show_grade", True),
+        "reminder_hour": u.get("reminder_hour", DEFAULT_REMINDER_HOUR),
+        "j_presets": u.get("j_presets", []),
+        "anchor_enabled": u.get("anchor_enabled", True),
+        "anchor_size": u.get("anchor_size", DEFAULT_ANCHOR_SIZE),
         "onboarded": bool(field),
     }
 
@@ -250,8 +286,29 @@ async def update_profile(data: ProfileIn, user: dict = Depends(current_user)):
         updates["study_field"] = data.study_field.strip()
     if data.show_grade is not None:
         updates["show_grade"] = data.show_grade
+    if data.reminder_hour is not None:
+        updates["reminder_hour"] = data.reminder_hour
+    if data.anchor_enabled is not None:
+        updates["anchor_enabled"] = data.anchor_enabled
+    if data.anchor_size is not None:
+        updates["anchor_size"] = data.anchor_size
     if updates:
         await db.users.update_one({"id": user["id"]}, {"$set": updates})
+    fresh = await db.users.find_one({"id": user["id"]})
+    return public_user(fresh)
+
+
+@api_router.post("/j/presets")
+async def create_preset(data: JPresetIn, user: dict = Depends(current_user)):
+    preset = {"id": str(uuid.uuid4()), "name": data.name.strip() or "Ma série", "offsets": normalize_offsets(data.offsets)}
+    await db.users.update_one({"id": user["id"]}, {"$push": {"j_presets": preset}})
+    fresh = await db.users.find_one({"id": user["id"]})
+    return public_user(fresh)
+
+
+@api_router.delete("/j/presets/{preset_id}")
+async def delete_preset(preset_id: str, user: dict = Depends(current_user)):
+    await db.users.update_one({"id": user["id"]}, {"$pull": {"j_presets": {"id": preset_id}}})
     fresh = await db.users.find_one({"id": user["id"]})
     return public_user(fresh)
 
@@ -302,6 +359,166 @@ def lighten_hex(hex_color: str, factor: float = 0.28) -> str:
         return hex_color
 
 
+async def effective_color(folder: dict) -> str:
+    """Folder color, or the derived tint of the nearest ancestor that has one."""
+    depth = 0
+    cur = folder
+    while cur:
+        if cur.get("color"):
+            c = cur["color"]
+            for _ in range(depth):
+                c = lighten_hex(c)
+            return c
+        if not cur.get("parent_id"):
+            break
+        cur = await db.folders.find_one({"id": cur["parent_id"], "deleted_at": None})
+        depth += 1
+    return DEFAULT_FOLDER_COLOR
+
+
+# ---------------------------------------------------------------------------
+# Méthode des J (spaced reminders)
+# ---------------------------------------------------------------------------
+async def ensure_schedule(folder: dict, owner_id: str, j0: Optional[str] = None) -> Optional[dict]:
+    """Create the J schedule for a folder if it does not exist yet (J0 = today)."""
+    if folder.get("j_enabled") is False:
+        return None
+    existing = await db.j_schedules.find_one({"folder_id": folder["id"], "owner_id": owner_id})
+    if existing:
+        return existing
+    sched = {
+        "id": str(uuid.uuid4()),
+        "owner_id": owner_id,
+        "folder_id": folder["id"],
+        "j0": j0 or datetime.now(timezone.utc).date().isoformat(),
+        "offsets": normalize_offsets(folder.get("j_offsets")),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.j_schedules.insert_one(sched)
+    return sched
+
+
+async def schedule_view(sched: dict) -> Optional[dict]:
+    folder = await db.folders.find_one({"id": sched["folder_id"], "deleted_at": None})
+    if not folder:
+        return None
+    topic = await get_topic(folder)
+    out = clean(sched)
+    out["folder_name"] = folder["name"]
+    out["topic_name"] = topic["name"]
+    out["color"] = await effective_color(folder)
+    return out
+
+
+def expand_events(view: dict, start: Optional[str] = None, end: Optional[str] = None) -> List[dict]:
+    j0 = datetime.fromisoformat(view["j0"]).date()
+    events = []
+    for off in [0] + list(view["offsets"]):
+        day = (j0 + timedelta(days=off)).isoformat()
+        if (start and day < start) or (end and day > end):
+            continue
+        events.append(
+            {
+                "id": f"{view['id']}-{off}",
+                "date": day,
+                "offset": off,
+                "label": f"J{off}",
+                "folder_id": view["folder_id"],
+                "folder_name": view["folder_name"],
+                "topic_name": view["topic_name"],
+                "color": view["color"],
+            }
+        )
+    return events
+
+
+@api_router.get("/j/schedules")
+async def list_schedules(user: dict = Depends(current_user)):
+    scheds = await db.j_schedules.find({"owner_id": user["id"]}).sort("created_at", -1).to_list(500)
+    out = []
+    for s in scheds:
+        v = await schedule_view(s)
+        if v:
+            out.append(v)
+    return out
+
+
+@api_router.get("/j/schedules/{folder_id}")
+async def get_schedule(folder_id: str, user: dict = Depends(current_user)):
+    sched = await db.j_schedules.find_one({"folder_id": folder_id, "owner_id": user["id"]})
+    if not sched:
+        return None
+    return await schedule_view(sched)
+
+
+@api_router.put("/j/schedules/{folder_id}")
+async def upsert_schedule(folder_id: str, data: JScheduleIn, user: dict = Depends(current_user)):
+    folder = await db.folders.find_one({"id": folder_id, "owner_id": user["id"], "deleted_at": None})
+    if not folder:
+        raise HTTPException(status_code=404, detail="Dossier introuvable")
+    if data.enabled is False:
+        await db.j_schedules.delete_many({"folder_id": folder_id, "owner_id": user["id"]})
+        await db.folders.update_one({"id": folder_id}, {"$set": {"j_enabled": False}})
+        return None
+    if data.j0:
+        try:
+            datetime.fromisoformat(data.j0)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Date J0 invalide")
+    folder_updates: Dict[str, Any] = {"j_enabled": True}
+    if data.offsets is not None:
+        folder_updates["j_offsets"] = normalize_offsets(data.offsets)
+    await db.folders.update_one({"id": folder_id}, {"$set": folder_updates})
+    folder.update(folder_updates)
+    sched = await ensure_schedule(folder, user["id"], j0=data.j0)
+    updates: Dict[str, Any] = {}
+    if data.j0:
+        updates["j0"] = data.j0
+    if data.offsets is not None:
+        updates["offsets"] = folder_updates["j_offsets"]
+    if updates:
+        await db.j_schedules.update_one({"id": sched["id"]}, {"$set": updates})
+        sched.update(updates)
+    return await schedule_view(sched)
+
+
+@api_router.delete("/j/schedules/{folder_id}")
+async def delete_schedule(folder_id: str, user: dict = Depends(current_user)):
+    await db.j_schedules.delete_many({"folder_id": folder_id, "owner_id": user["id"]})
+    await db.folders.update_one({"id": folder_id, "owner_id": user["id"]}, {"$set": {"j_enabled": False}})
+    return {"ok": True}
+
+
+@api_router.get("/j/events")
+async def list_events(
+    start: str = Query(...),
+    end: str = Query(...),
+    user: dict = Depends(current_user),
+):
+    scheds = await db.j_schedules.find({"owner_id": user["id"]}).to_list(500)
+    events: List[dict] = []
+    for s in scheds:
+        v = await schedule_view(s)
+        if v:
+            events.extend(expand_events(v, start, end))
+    events.sort(key=lambda e: (e["date"], e["offset"]))
+    return events
+
+
+@api_router.get("/j/upcoming")
+async def upcoming_events(user: dict = Depends(current_user)):
+    """Future reminders (from today) used by the device to schedule local notifications."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    scheds = await db.j_schedules.find({"owner_id": user["id"]}).to_list(500)
+    events: List[dict] = []
+    for s in scheds:
+        v = await schedule_view(s)
+        if v:
+            events.extend(e for e in expand_events(v, start=today) if e["offset"] > 0)
+    events.sort(key=lambda e: (e["date"], e["offset"]))
+    return {"reminder_hour": user.get("reminder_hour", DEFAULT_REMINDER_HOUR), "events": events[:60]}
+
+
 @api_router.post("/folders")
 async def create_folder(data: FolderIn, user: dict = Depends(current_user)):
     color = data.color
@@ -319,6 +536,8 @@ async def create_folder(data: FolderIn, user: dict = Depends(current_user)):
         "name": data.name.strip(),
         "parent_id": data.parent_id,
         "color": color,
+        "j_enabled": data.j_enabled,
+        "j_offsets": normalize_offsets(data.j_offsets) if data.j_offsets else None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "deleted_at": None,
     }
@@ -333,10 +552,27 @@ async def update_folder(folder_id: str, data: FolderUpdateIn, user: dict = Depen
         updates["name"] = data.name.strip()
     if data.color is not None:
         updates["color"] = data.color
+    if data.j_enabled is not None:
+        updates["j_enabled"] = data.j_enabled
+    if data.j_offsets is not None:
+        updates["j_offsets"] = normalize_offsets(data.j_offsets)
     if updates:
         await db.folders.update_one({"id": folder_id, "owner_id": user["id"]}, {"$set": updates})
     folder = await db.folders.find_one({"id": folder_id, "owner_id": user["id"], "deleted_at": None})
-    return clean(folder) if folder else {"ok": True}
+    if not folder:
+        return {"ok": True}
+    # Keep the J schedule in sync with the folder's J configuration.
+    if data.j_enabled is False:
+        await db.j_schedules.delete_many({"folder_id": folder_id, "owner_id": user["id"]})
+    else:
+        sched = await db.j_schedules.find_one({"folder_id": folder_id, "owner_id": user["id"]})
+        if sched and data.j_offsets is not None:
+            await db.j_schedules.update_one({"id": sched["id"]}, {"$set": {"offsets": updates["j_offsets"]}})
+        elif not sched and data.j_enabled is True:
+            has_quiz = await db.quizzes.find_one({"folder_id": folder_id, "owner_id": user["id"], "deleted_at": None})
+            if has_quiz:
+                await ensure_schedule(folder, user["id"])
+    return clean(folder)
 
 
 @api_router.get("/folders")
@@ -378,6 +614,7 @@ async def delete_folder(folder_id: str, user: dict = Depends(current_user)):
     await db.folders.update_one(
         {"id": folder_id, "owner_id": user["id"]}, {"$set": {"deleted_at": now}}
     )
+    await db.j_schedules.delete_many({"folder_id": folder_id, "owner_id": user["id"]})
     return {"ok": True}
 
 
@@ -396,6 +633,11 @@ async def upload_source(
     kind = "pdf" if "pdf" in mime or ext == "pdf" else ("image" if mime.startswith("image") else "file")
     path = f"{APP_NAME}/uploads/{user['id']}/{uuid.uuid4()}.{ext}"
     await run_in_threadpool(put_object, path, content, mime)
+    text_content = None
+    if kind == "pdf":
+        text = await run_in_threadpool(extract_pdf_text, content)
+        if len(text) >= MIN_PDF_TEXT:
+            text_content = text
     source = {
         "id": str(uuid.uuid4()),
         "owner_id": user["id"],
@@ -404,7 +646,7 @@ async def upload_source(
         "kind": kind,
         "storage_path": path,
         "mime_type": mime,
-        "text_content": None,
+        "text_content": text_content,
         "size": len(content),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "deleted_at": None,
@@ -514,21 +756,47 @@ def build_system(field: Optional[str]) -> str:
     )
 
 
-def build_prompt(num: int, text_blob: str, field: Optional[str] = None) -> str:
+def build_prompt(num: int, text_blob: str, field: Optional[str] = None, part: Optional[tuple] = None) -> str:
     style = "de type EDN/PASS de difficulté élevée" if is_medecine(field) else "d'examen universitaire exigeants"
+    focus = ""
+    if part and part[1] > 1:
+        focus = (
+            f"- Ce lot est la partie {part[0]}/{part[1]} : découpe mentalement le contenu en {part[1]} parties "
+            f"égales et concentre-toi UNIQUEMENT sur la partie {part[0]} pour éviter les doublons avec les autres lots.\n"
+        )
     return (
         f"À partir des documents et du texte de cours fournis, génère exactement {num} QCM "
         f"{style}.\n\n"
         "Contraintes:\n"
         "- Chaque QCM a 5 propositions A, B, C, D, E.\n"
         "- Une ou plusieurs propositions peuvent être vraies (indique toutes les bonnes lettres).\n"
-        "- Les questions doivent couvrir l'ensemble du contenu fourni.\n"
-        "- L'explication doit être précise et basée sur le cours fourni.\n\n"
-        "Réponds STRICTEMENT avec un tableau JSON de cet exact format:\n"
+        "- Les questions doivent couvrir le contenu fourni.\n"
+        "- L'explication doit être précise, concise (2-4 phrases) et basée sur le cours fourni.\n"
+        + focus +
+        "\nRéponds STRICTEMENT avec un tableau JSON valide, sans markdown, sans texte avant ou après, de cet exact format:\n"
         '[{"q":"énoncé","options":{"A":"...","B":"...","C":"...","D":"...","E":"..."},'
         '"correct":["A","C"],"explanation":"..."}]\n\n'
         + (f"TEXTE DE COURS FOURNI:\n{text_blob}\n" if text_blob else "")
     )
+
+
+MIN_PDF_TEXT = 800
+
+
+def extract_pdf_text(content: bytes) -> str:
+    """Best-effort text extraction (fast path: avoids sending the PDF binary to the model)."""
+    try:
+        from pypdf import PdfReader
+        import io
+
+        reader = PdfReader(io.BytesIO(content))
+        parts = []
+        for page in reader.pages[:200]:
+            parts.append(page.extract_text() or "")
+        return "\n".join(parts).strip()
+    except Exception as e:
+        logger.warning("pdf text extraction failed: %s", e)
+        return ""
 
 
 async def _load_source_context(sources: List[dict]):
@@ -536,49 +804,149 @@ async def _load_source_context(sources: List[dict]):
     file_contents: List[FileContentWithMimeType] = []
     tmp_files: List[str] = []
     for s in sources:
-        if s["kind"] == "text" and s.get("text_content"):
-            text_parts.append(f"[{s['name']}]\n{s['text_content'][:15000]}")
-        elif s.get("storage_path"):
-            try:
-                content, _ = await run_in_threadpool(get_object, s["storage_path"])
-                ext = s["storage_path"].split(".")[-1]
-                fd, tmp_path = tempfile.mkstemp(suffix=f".{ext}")
-                with os.fdopen(fd, "wb") as fh:
-                    fh.write(content)
-                tmp_files.append(tmp_path)
-                file_contents.append(FileContentWithMimeType(file_path=tmp_path, mime_type=s["mime_type"]))
-            except Exception as e:
-                logger.warning("skip source %s: %s", s.get("id"), e)
+        if s.get("text_content"):
+            text_parts.append(f"[{s['name']}]\n{s['text_content'][:60000]}")
+            continue
+        if not s.get("storage_path"):
+            continue
+        try:
+            content, _ = await run_in_threadpool(get_object, s["storage_path"])
+            if s.get("kind") == "pdf":
+                text = await run_in_threadpool(extract_pdf_text, content)
+                if len(text) >= MIN_PDF_TEXT:
+                    # Cache the extracted text so next generations are instant.
+                    await db.sources.update_one({"id": s["id"]}, {"$set": {"text_content": text}})
+                    text_parts.append(f"[{s['name']}]\n{text[:60000]}")
+                    continue
+            ext = s["storage_path"].split(".")[-1]
+            fd, tmp_path = tempfile.mkstemp(suffix=f".{ext}")
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(content)
+            tmp_files.append(tmp_path)
+            file_contents.append(FileContentWithMimeType(file_path=tmp_path, mime_type=s["mime_type"]))
+        except Exception as e:
+            logger.warning("skip source %s: %s", s.get("id"), e)
     return text_parts, file_contents, tmp_files
 
 
-@api_router.post("/quizzes/generate")
-async def generate_quiz(data: GenerateIn, user: dict = Depends(current_user)):
-    root = await db.folders.find_one({"id": data.folder_id, "owner_id": user["id"], "deleted_at": None})
-    if not root:
-        raise HTTPException(status_code=404, detail="Dossier introuvable")
+def _parse_questions(raw: str) -> List[dict]:
+    parsed = _extract_json(raw)
+    if isinstance(parsed, dict):
+        parsed = parsed.get("questions") or parsed.get("qcm") or [parsed]
+    out = []
+    for item in parsed if isinstance(parsed, list) else []:
+        if not isinstance(item, dict) or "options" not in item or not item.get("q"):
+            continue
+        out.append(
+            {
+                "q": item.get("q", ""),
+                "options": item.get("options", {}),
+                "correct": [str(c).upper() for c in item.get("correct", [])],
+                "explanation": item.get("explanation", ""),
+            }
+        )
+    return out
 
-    folder_ids = await gather_folder_ids(data.folder_id, user["id"])
-    sources = await db.sources.find(
-        {"folder_id": {"$in": folder_ids}, "owner_id": user["id"], "deleted_at": None}
-    ).to_list(200)
-    if not sources:
-        raise HTTPException(status_code=400, detail="Ajoutez au moins une source (cours ou annales) dans ce dossier.")
 
-    text_parts, file_contents, tmp_files = await _load_source_context(sources)
+async def _generate_batch(system: str, prompt: str, file_contents: List[FileContentWithMimeType]) -> List[dict]:
+    chat = (
+        LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"gen-{uuid.uuid4()}", system_message=system)
+        .with_model("gemini", GEN_MODEL)
+        .with_params(max_tokens=16000)
+    )
+    last_err: Optional[Exception] = None
+    for _ in range(2):
+        try:
+            resp = await chat.send_message(UserMessage(text=prompt, file_contents=file_contents or None))
+            raw = resp if isinstance(resp, str) else getattr(resp, "text", None) or str(resp)
+            return _parse_questions(raw)
+        except Exception as e:  # network / JSON error → one retry
+            last_err = e
+            logger.warning("batch failed, retrying: %s", e)
+    raise last_err or RuntimeError("batch failed")
 
-    field = user.get("study_field")
-    num = max(3, min(data.num_questions, 30))
-    prompt = build_prompt(num, "\n\n".join(text_parts), field)
 
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"gen-{uuid.uuid4()}",
-        system_message=build_system(field),
-    ).with_model("gemini", GEMINI_MODEL)
+BATCH_SIZE = 10
 
+
+async def run_generation_job(job_id: str):
+    job = await db.generation_jobs.find_one({"id": job_id})
+    if not job:
+        return
+    tmp_files: List[str] = []
     try:
-        resp = await chat.send_message(UserMessage(text=prompt, file_contents=file_contents or None))
+        user = await db.users.find_one({"id": job["owner_id"]})
+        root = await db.folders.find_one({"id": job["folder_id"], "deleted_at": None})
+        folder_ids = await gather_folder_ids(job["folder_id"], job["owner_id"])
+        sources = await db.sources.find(
+            {"folder_id": {"$in": folder_ids}, "owner_id": job["owner_id"], "deleted_at": None}
+        ).to_list(200)
+        text_parts, file_contents, tmp_files = await _load_source_context(sources)
+        await db.generation_jobs.update_one({"id": job_id}, {"$set": {"status": "running", "step": "Lecture des cours terminée"}})
+
+        field = user.get("study_field")
+        num = job["num_questions"]
+        n_batches = max(1, -(-num // BATCH_SIZE))
+        sizes = [num // n_batches + (1 if i < num % n_batches else 0) for i in range(n_batches)]
+        blob = "\n\n".join(text_parts)
+        system = build_system(field)
+
+        tasks = [
+            _generate_batch(system, build_prompt(sizes[i], blob, field, (i + 1, n_batches)), file_contents)
+            for i in range(n_batches)
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        origin = await folder_meta(job["folder_id"])
+        questions: List[dict] = []
+        seen = set()
+        for r in results:
+            if isinstance(r, Exception):
+                logger.error("batch error: %s", r)
+                continue
+            for q in r:
+                key = q["q"].strip().lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                questions.append(
+                    dict(
+                        q,
+                        id=str(uuid.uuid4()),
+                        origin_folder_id=origin["folder_id"],
+                        origin_folder_name=origin["folder_name"],
+                        origin_topic_folder_id=origin["topic_folder_id"],
+                        origin_topic_name=origin["topic_name"],
+                    )
+                )
+        if not questions:
+            raise RuntimeError("Aucune question générée, réessayez.")
+
+        quiz = {
+            "id": str(uuid.uuid4()),
+            "owner_id": job["owner_id"],
+            "folder_id": job["folder_id"],
+            "title": f"QCM · {root['name']}",
+            "kind": "generated",
+            "questions": questions[:num],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "deleted_at": None,
+        }
+        await db.quizzes.insert_one(quiz)
+        # Méthode des J: J0 = the day the first QCM of this chapter is generated.
+        await ensure_schedule(root, job["owner_id"])
+        await db.generation_jobs.update_one(
+            {"id": job_id},
+            {"$set": {"status": "done", "quiz_id": quiz["id"], "question_count": len(quiz["questions"]),
+                      "finished_at": datetime.now(timezone.utc).isoformat()}},
+        )
+    except Exception as e:
+        logger.exception("generation job %s failed", job_id)
+        await db.generation_jobs.update_one(
+            {"id": job_id},
+            {"$set": {"status": "error", "error": str(e) or "La génération a échoué, réessayez.",
+                      "finished_at": datetime.now(timezone.utc).isoformat()}},
+        )
     finally:
         for p in tmp_files:
             try:
@@ -586,46 +954,59 @@ async def generate_quiz(data: GenerateIn, user: dict = Depends(current_user)):
             except OSError:
                 pass
 
-    raw = resp if isinstance(resp, str) else getattr(resp, "text", None) or str(resp)
-    try:
-        parsed = _extract_json(raw)
-    except Exception as e:
-        logger.error("JSON parse failed: %s\n%s", e, raw[:500])
-        raise HTTPException(status_code=502, detail="La génération a échoué, réessayez.")
 
-    questions = []
-    origin = await folder_meta(data.folder_id)
-    for item in parsed:
-        if not isinstance(item, dict) or "options" not in item:
-            continue
-        questions.append(
-            {
-                "id": str(uuid.uuid4()),
-                "q": item.get("q", ""),
-                "options": item.get("options", {}),
-                "correct": [c.upper() for c in item.get("correct", [])],
-                "explanation": item.get("explanation", ""),
-                "origin_folder_id": origin["folder_id"],
-                "origin_folder_name": origin["folder_name"],
-                "origin_topic_folder_id": origin["topic_folder_id"],
-                "origin_topic_name": origin["topic_name"],
-            }
-        )
-    if not questions:
-        raise HTTPException(status_code=502, detail="Aucune question générée, réessayez.")
+@api_router.post("/quizzes/generate")
+async def generate_quiz(data: GenerateIn, user: dict = Depends(current_user)):
+    """Start a background generation job; poll GET /quizzes/jobs/{id} for the result."""
+    root = await db.folders.find_one({"id": data.folder_id, "owner_id": user["id"], "deleted_at": None})
+    if not root:
+        raise HTTPException(status_code=404, detail="Dossier introuvable")
+    folder_ids = await gather_folder_ids(data.folder_id, user["id"])
+    has_source = await db.sources.find_one(
+        {"folder_id": {"$in": folder_ids}, "owner_id": user["id"], "deleted_at": None}
+    )
+    if not has_source:
+        raise HTTPException(status_code=400, detail="Ajoutez au moins une source (cours ou annales) dans ce dossier.")
 
-    quiz = {
+    job = {
         "id": str(uuid.uuid4()),
         "owner_id": user["id"],
         "folder_id": data.folder_id,
-        "title": f"QCM · {root['name']}",
-        "kind": "generated",
-        "questions": questions,
+        "num_questions": max(3, min(data.num_questions, MAX_QUESTIONS)),
+        "status": "pending",
+        "step": "Lecture des cours…",
+        "quiz_id": None,
+        "error": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "deleted_at": None,
     }
-    await db.quizzes.insert_one(quiz)
-    return clean(quiz)
+    await db.generation_jobs.insert_one(job)
+    asyncio.create_task(run_generation_job(job["id"]))
+    return clean(job)
+
+
+@api_router.get("/quizzes/jobs/{job_id}")
+async def get_generation_job(job_id: str, user: dict = Depends(current_user)):
+    job = await db.generation_jobs.find_one({"id": job_id, "owner_id": user["id"]})
+    if not job:
+        raise HTTPException(status_code=404, detail="Génération introuvable")
+    return clean(job)
+
+
+@api_router.get("/quizzes/jobs")
+async def list_generation_jobs(folder_id: str = Query(...), user: dict = Depends(current_user)):
+    """Active (or recently failed) jobs for a folder, so the UI can show progress after navigating away."""
+    since = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    jobs = await db.generation_jobs.find(
+        {"owner_id": user["id"], "folder_id": folder_id, "created_at": {"$gte": since},
+         "status": {"$in": ["pending", "running", "error"]}}
+    ).sort("created_at", -1).to_list(20)
+    return [clean(j) for j in jobs]
+
+
+@api_router.delete("/quizzes/jobs/{job_id}")
+async def dismiss_generation_job(job_id: str, user: dict = Depends(current_user)):
+    await db.generation_jobs.delete_one({"id": job_id, "owner_id": user["id"]})
+    return {"ok": True}
 
 
 @api_router.post("/review/quiz")
@@ -704,7 +1085,8 @@ async def anchor_daily(user: dict = Depends(current_user)):
     if not pool:
         raise HTTPException(status_code=400, detail="Générez d'abord des QCM dans vos dossiers.")
 
-    sample = random.sample(pool, min(40, len(pool)))
+    size = user.get("anchor_size", DEFAULT_ANCHOR_SIZE)
+    sample = random.sample(pool, min(size, len(pool)))
     questions = [dict(q, id=str(uuid.uuid4())) for q in sample]
 
     quiz = {

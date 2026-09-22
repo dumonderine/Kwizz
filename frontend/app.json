@@ -41,6 +41,12 @@
       "expo-status-bar",
       "@react-native-vector-icons/ionicons",
       [
+        "expo-notifications",
+        {
+          "color": "#0284c7"
+        }
+      ],
+      [
         "expo-image-picker",
         {
           "photosPermission": "Accéder à vos photos pour importer vos cours"

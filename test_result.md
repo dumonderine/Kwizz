@@ -101,3 +101,49 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+user_problem_statement: "Kwizz — QCM app. New: Méthode des J (spaced reminders per chapter, reusable J series, calendar tab month/week, local notifications at chosen hour), Ancrage on/off + size setting, custom QCM count (max 100), generation text change."
+
+backend:
+  - task: "J schedules / events / presets API (/api/j/*), folder j_enabled/j_offsets, profile reminder_hour/anchor_enabled/anchor_size, generate auto-creates schedule, anchor uses anchor_size, generate clamps to 100"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Implemented, smoke-tested with curl. Needs full test."
+
+frontend:
+  - task: "Calendrier tab (month/week), J card + JScheduleModal in folder screen, J section in FolderFormModal, Profil settings (Ancrage toggle/size, reminder hour, J presets), custom QCM count in generate modal"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(tabs)/calendar.tsx, /app/frontend/app/folder/[id].tsx, /app/frontend/src/components/j-schedule-modal.tsx, /app/frontend/src/components/j-series-picker.tsx, /app/frontend/app/(tabs)/profile.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Implemented; calendar screenshot OK on web."
+
+metadata:
+  created_by: "main_agent"
+  version: "2.0"
+  test_sequence: 2
+
+test_plan:
+  current_focus:
+    - "J schedules API"
+    - "Calendar tab UI"
+    - "Profile settings"
+  stuck_tasks: []
+  test_all: false
+
+agent_communication:
+  - agent: "main"
+    message: "Test account tester@kwizz.fr / secret123 (onboarded). Do NOT run /quizzes/generate more than once (Gemini cost); user reported a generation error earlier caused by backend auto-reload during my edits — please verify one generation succeeds end-to-end (use existing folder with text source or add a short text source)."
+  - agent: "main"
+    message: "UPDATE: generation is now a background job: POST /api/quizzes/generate returns {id,status:'pending'}; poll GET /api/quizzes/jobs/{id} until status done (quiz_id) or error. GET /api/quizzes/jobs?folder_id= lists active jobs. Model gemini-3.5-flash, batches of 10 in parallel. Verified 30 QCM in ~35s via curl. Frontend: folder screen polls job, shows progress row, 'Continuer en arrière-plan' button, custom count input (gen-count-custom). Please test: one generation E2E from the UI (10 questions) on folder 8e251e6b-0be7-43ce-881b-aa68b032cb8f (has a text source), the calendar tab, J modal in folder screen, folder create with J switch, profile settings (anchor toggle/size, reminder hour, presets)."
