@@ -22,7 +22,8 @@ from pydantic import BaseModel, EmailStr, Field
 from passlib.context import CryptContext
 from dotenv import load_dotenv
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
+import google.generativeai as genai
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -37,7 +38,7 @@ db = client[os.environ["DB_NAME"]]
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret")
 JWT_ALG = "HS256"
 JWT_EXPIRE_DAYS = 30
-EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = "gemini-3.1-pro-preview"  # chat / explanations
 GEN_MODEL = "gemini-3.5-flash"  # QCM generation: fast, large context, robust JSON
 
@@ -848,19 +849,19 @@ def _parse_questions(raw: str) -> List[dict]:
     return out
 
 
-async def _generate_batch(system: str, prompt: str, file_contents: List[FileContentWithMimeType]) -> List[dict]:
-    chat = (
-        LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"gen-{uuid.uuid4()}", system_message=system)
-        .with_model("gemini", GEN_MODEL)
-        .with_params(max_tokens=16000)
-    )
+async def _generate_batch(system: str, prompt: str, file_contents: List) -> List[dict]:
+    model = genai.GenerativeModel(model_name=GEN_MODEL.replace("gemini-", "models/gemini-") if not GEN_MODEL.startswith("models/") else GEN_MODEL, system_instruction=system)
+    parts = [prompt]
+    for fc in (file_contents or []):
+        with open(fc.file_path, "rb") as f:
+            parts.append({"mime_type": fc.mime_type, "data": f.read()})
     last_err: Optional[Exception] = None
     for _ in range(2):
         try:
-            resp = await chat.send_message(UserMessage(text=prompt, file_contents=file_contents or None))
-            raw = resp if isinstance(resp, str) else getattr(resp, "text", None) or str(resp)
+            resp = await run_in_threadpool(model.generate_content, parts, generation_config={"max_output_tokens": 16000})
+            raw = resp.text
             return _parse_questions(raw)
-        except Exception as e:  # network / JSON error → one retry
+        except Exception as e:
             last_err = e
             logger.warning("batch failed, retrying: %s", e)
     raise last_err or RuntimeError("batch failed")
@@ -1331,14 +1332,16 @@ async def course_chat(data: ChatIn, user: dict = Depends(current_user)):
     if text_parts:
         prompt = f"{prompt}\n\nEXTRAITS DE COURS:\n" + "\n\n".join(text_parts)
 
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"chat-{user['id']}-{data.folder_id or 'gen'}",
-        system_message=system,
-    ).with_model("gemini", GEMINI_MODEL)
+    model = genai.GenerativeModel(
+        model_name=GEMINI_MODEL.replace("gemini-", "models/gemini-") if not GEMINI_MODEL.startswith("models/") else GEMINI_MODEL,
+        system_instruction=system)
+    parts = [prompt]
+    for fc in (file_contents or []):
+        with open(fc.file_path, "rb") as f:
+            parts.append({"mime_type": fc.mime_type, "data": f.read()})
 
     try:
-        resp = await chat.send_message(UserMessage(text=prompt, file_contents=file_contents or None))
+        resp = await run_in_threadpool(model.generate_content, parts)
     finally:
         for p in tmp_files:
             try:
@@ -1346,7 +1349,7 @@ async def course_chat(data: ChatIn, user: dict = Depends(current_user)):
             except OSError:
                 pass
 
-    answer = resp if isinstance(resp, str) else getattr(resp, "text", None) or str(resp)
+    answer = resp.text
     return {"answer": answer}
 
 
