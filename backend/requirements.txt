@@ -26,16 +26,7 @@ filelock==4.0.1
 flake8==7.3.0
 frozenlist==1.8.0
 fsspec==2026.9.0
-google-ai-generativelanguage
-google-api-core
-google-api-python-client
-google-auth
-google-auth-httplib2
-google-genai
-google-generativeai
-googleapis-common-protos
-grpcio
-grpcio-status
+google-generativeai==0.8.3
 h11==0.16.0
 hf-xet==1.6.0
 httpcore==1.0.9
@@ -72,8 +63,6 @@ pillow==12.3.0
 platformdirs==4.11.11
 pluggy==1.6.0
 propcache==0.5.4
-proto-plus
-protobuf
 pyasn1==0.6.4
 pyasn1_modules==0.4.2
 pycodestyle==2.14.0
