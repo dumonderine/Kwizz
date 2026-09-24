@@ -24,6 +24,9 @@ from dotenv import load_dotenv
 
 import google.generativeai as genai
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+import cloudinary
+import cloudinary.uploader
+cloudinary.config(secure=True)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -45,10 +48,9 @@ GEN_MODEL = "gemini-3.5-flash"  # QCM generation: fast, large context, robust JS
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Object storage
-STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
-STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+
 APP_NAME = "edn-prep"
-_storage_key: Optional[str] = None
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ednprep")
@@ -61,37 +63,15 @@ bearer = HTTPBearer(auto_error=False)
 # ---------------------------------------------------------------------------
 # Storage helpers
 # ---------------------------------------------------------------------------
-def init_storage() -> str:
-    global _storage_key
-    if _storage_key:
-        return _storage_key
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=30)
-    resp.raise_for_status()
-    _storage_key = resp.json()["storage_key"]
-    return _storage_key
-
-
 def put_object(path: str, data: bytes, content_type: str) -> dict:
-    key = init_storage()
-    resp = requests.put(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key, "Content-Type": content_type},
-        data=data,
-        timeout=120,
-    )
-    resp.raise_for_status()
-    return resp.json()
+    result = cloudinary.uploader.upload(data, resource_type="raw", public_id=path, overwrite=True,)
+    return result
 
 
 def get_object(path: str) -> tuple[bytes, str]:
-    global _storage_key
-    key = init_storage()
-    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
-    if resp.status_code == 503:
-        _storage_key = None
-        key = init_storage()
-        resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
-    resp.raise_for_status()
+   url, _ = cloudinary.utils.cloudinary_url(path, resource_type="raw")
+   resp = requests.get(url, timeout=60)
+   resp.raise_for_status()
     return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
 
 
