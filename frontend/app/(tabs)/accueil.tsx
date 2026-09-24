@@ -92,6 +92,7 @@ const useStyles = makeStyles((colors) => ({
     backgroundColor: colors.brandSecondary,
     borderRadius: 18,
     padding: 18,
+    minHeight: 170,
   },
   pressed: { opacity: 0.7 },
   anchorIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" },

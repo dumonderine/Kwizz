@@ -23,6 +23,10 @@ export default function TabsLayout() {
     const { NativeTabs } = require("expo-router/unstable-native-tabs");
     return (
       <NativeTabs>
+        <NativeTabs.Trigger name="accueil">
+          <NativeTabs.Trigger.Icon sf="house.fill" />
+          <NativeTabs.Trigger.Label>Accueil</NativeTabs.Trigger.Label>
+        </NativeTabs.Trigger>
         <NativeTabs.Trigger name="index">
           <NativeTabs.Trigger.Icon sf="folder.fill" />
           <NativeTabs.Trigger.Label>Dossiers</NativeTabs.Trigger.Label>
@@ -62,6 +66,7 @@ export default function TabsLayout() {
         tabBarLabelStyle: { fontFamily: fonts.semibold, fontSize: isTablet ? 14 : 11 },
       }}
     >
+      <Tabs.Screen name="accueil" options={{ title: "Accueil", tabBarIcon: ({color, size}) => <Ionicons name="home" size={size} color={color} />, }} /> 
       <Tabs.Screen
         name="index"
         options={{
