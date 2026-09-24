@@ -72,7 +72,7 @@ def get_object(path: str) -> tuple[bytes, str]:
    url, _ = cloudinary.utils.cloudinary_url(path, resource_type="raw")
    resp = requests.get(url, timeout=60)
    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+   return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
 
 
 # ---------------------------------------------------------------------------
