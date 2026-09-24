@@ -49,7 +49,8 @@ export default function TabsLayout() {
         headerShown: false,
         tabBarPosition: isTablet ? "left" : "bottom",
         tabBarActiveTintColor: colors.brandPrimary,
-        tabBarInactiveTintColor: colors.muted,
+        tabBarInactiveTintColor: colors.onSurfaceSecondary,
+        tabBarActiveBackgroundColor : colors.brandPrimary,
         tabBarStyle: {
           backgroundColor: colors.surface,
           borderTopColor: colors.border,
