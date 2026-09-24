@@ -48,7 +48,7 @@ export default function TabsLayout() {
       screenOptions={{
         headerShown: false,
         tabBarPosition: isTablet ? "left" : "bottom",
-        tabBarActiveTintColor: colors.brandPrimary,
+        tabBarActiveTintColor: colors.onSurfacerimary,
         tabBarInactiveTintColor: colors.onSurfaceSecondary,
         tabBarActiveBackgroundColor : colors.brandPrimary,
         tabBarStyle: {
