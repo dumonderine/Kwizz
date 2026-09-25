@@ -17,7 +17,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@react-native-vector-icons/ionicons";
 
-import { apiFetch, uploadSource } from "@/src/api";
+import { apiFetch, uploadAnnale, uploadSource } from "@/src/api";
 import { DEFAULT_FOLDER_COLOR, lighten, tintBg } from "@/src/colors";
 import { Button } from "@/src/components/button";
 import { FolderFormModal, FolderJConfig } from "@/src/components/folder-form-modal";
@@ -244,14 +244,11 @@ export default function FolderDetail() {
     const a = res.assets[0];
     await doUpload(a.uri, a.fileName || "photo.jpg", a.mimeType || "image/jpeg");
   };
-  const doUploadAnnale = async (uri: string, name: string, type: string) => {
+    const doUploadAnnale = async (uri: string, name: string, type: string) => {
     setShowAnnale(false);
     setUploading(true);
     try {
-      const form = new FormData();
-      form.append("folder_id", id!);
-      form.append("file", { uri, name, type } as any);
-      const job = await apiFetch<GenJob>("/quizzes/generate-annale", { method: "POST", body: form });
+      const job = await uploadAnnale(id!, { uri, name, type }, Platform);
       setJobId(job.id);
       qc.invalidateQueries({ queryKey: ["gen-jobs", id] });
     } catch (e: any) {
