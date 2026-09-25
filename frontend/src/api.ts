@@ -72,7 +72,8 @@ export async function uploadSource(
   const data = text ? JSON.parse(text) : null;
   if (!res.ok) throw new Error((data && data.detail) || "Échec de l'envoi");
   return data;
-  
+}
+
 export async function uploadAnnale(
   folderId: string,
   file: { uri: string; name: string; type: string },
