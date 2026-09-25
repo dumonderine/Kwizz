@@ -337,31 +337,37 @@ export default function QuizPlay() {
           ))}
         </View>
 
-        {answered ? (
-          <View style={[styles.explBox, dCount === 0 ? styles.explSuccess : styles.explWarning]}>
-            <Text style={[styles.explHeader, { color: dCount === 0 ? colors.success : colors.warning }]}>
-              {dCount === 0
-                ? `✅ Bonne réponse${ptTxt}`
-                : `⚠️ ${dCount} discordance${dCount > 1 ? "s" : ""}${ptTxt} (attendu : ${current.correct.join(", ")})`}
-            </Text>
-            <Text style={styles.explText}>{current.explanation}</Text>
-              {dCount === 0 ? (
+               {answered ? (
+          <>
+            {dCount === 0 ? (
               <Pressable
-                style={styles.askAI}
+                style={styles.flagRow}
                 onPress={() => !flagged[current.id] && flagReview.mutate(current.id)}
                 disabled={flagged[current.id] || flagReview.isPending}
                 testID="flag-review"
               >
-                <Ionicons
-                  name={flagged[current.id] ? "checkmark-circle" : "add-circle-outline"}
-                  size={16}
-                  color={colors.brandPrimary}
-                />
-                <Text style={styles.askAIText}>
+                <View style={[styles.checkbox, flagged[current.id] && styles.checkboxOn]}>
+                  {flagged[current.id] ? <Ionicons name="checkmark" size={14} color="#000" /> : null}
+                </View>
+                <Text style={styles.flagRowText}>
                   {flagged[current.id] ? "Ajoutée aux QCM à revoir" : "Ajouter quand même aux QCM à revoir"}
                 </Text>
               </Pressable>
             ) : null}
+            <View style={[styles.explBox, dCount === 0 ? styles.explSuccess : styles.explWarning]}>
+              <Text style={[styles.explHeader, { color: dCount === 0 ? colors.success : colors.warning }]}>
+                {dCount === 0
+                  ? `✅ Bonne réponse${ptTxt}`
+                  : `⚠️ ${dCount} discordance${dCount > 1 ? "s" : ""}${ptTxt} (attendu : ${current.correct.join(", ")})`}
+              </Text>
+              <Text style={styles.explText}>{current.explanation}</Text>
+              <Pressable style={styles.askAI} onPress={askAI} testID="ask-ai-inline">
+                <Ionicons name="sparkles" size={16} color={colors.brandPrimary} />
+                <Text style={styles.askAIText}>Demander plus d'explications à l'IA</Text>
+              </Pressable>
+            </View>
+          </>
+        ) : null}
             <Pressable style={styles.askAI} onPress={askAI} testID="ask-ai-inline">
               <Ionicons name="sparkles" size={16} color={colors.brandPrimary} />
               <Text style={styles.askAIText}>Demander plus d'explications à l'IA</Text>
@@ -452,6 +458,8 @@ const useStyles = makeStyles((colors) => ({
   explText: { fontSize: 14, fontFamily: fonts.regular, color: colors.onSurface, lineHeight: 21 },
   askAI: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 14 },
   askAIText: { fontSize: 14, fontFamily: fonts.bold, color: colors.brandPrimary },
+  flagRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 20, marginBottom: 8 },
+  flagRowText: { fontSize: 14, fontFamily: fonts.bold, color: colors.brandPrimary },
 
   bottomBar: {
     position: "absolute",
