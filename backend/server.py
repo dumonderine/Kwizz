@@ -756,7 +756,9 @@ def build_prompt(num: int, text_blob: str, field: Optional[str] = None, part: Op
         f"{style}.\n\n"
         "Contraintes:\n"
         "- Chaque QCM a 5 propositions A, B, C, D, E.\n"
-        "- Une ou plusieurs propositions peuvent être vraies (indique toutes les bonnes lettres).\n"
+        "- Sur l'ensemble des QCM générés, environ 1 question sur 10 doit avoir une seule bonne "
+        "réponse, environ 1 question sur 10 doit avoir les cinq propositions vraies (A à E), et le "
+        "reste (la grande majorité) doit avoir entre 2 et 4 bonnes réponses.\n"
         "- Les questions doivent couvrir le contenu fourni.\n"
         "- L'explication doit être précise, concise (2-4 phrases) et basée sur le cours fourni.\n"
         + focus +
