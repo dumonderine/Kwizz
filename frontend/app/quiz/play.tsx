@@ -40,24 +40,33 @@ function pointsFor(d: number) {
 function fmt(n: number) {
   return Number.isInteger(n) ? `${n}` : n.toFixed(1).replace(".", ",");
 }
-function shuffleOptions(q: Question): Question {
+function shuffleOptions(q: Question): any {
   const letters = Object.keys(q.options);
-  const texts = letters.map((l) => q.options[l]);
-  const correctTexts = new Set(q.correct.map((l) => q.options[l]));
-  for (let i = texts.length - 1; i > 0; i--) {
+  const order = [...letters];
+  for (let i = order.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [texts[i], texts[j]] = [texts[j], texts[i]];
+    [order[i], order[j]] = [order[j], order[i]];
   }
   const options: Record<string, string> = {};
   const correct: string[] = [];
-  letters.forEach((l, i) => {
-    options[l] = texts[i];
-    if (correctTexts.has(texts[i])) correct.push(l);
+  const letterMap: Record<string, string> = {};
+  letters.forEach((newLetter, i) => {
+    const originalLetter = order[i];
+    options[newLetter] = q.options[originalLetter];
+    letterMap[newLetter] = originalLetter;
+    if (q.correct.includes(originalLetter)) correct.push(newLetter);
   });
-  return { ...q, options, correct };
+  return { ...q, options, correct, letterMap };
 }
-function progressKey(id: string) {
-  return `quiz_progress_${id}`;
+function toOriginalLetters(sel: string[], q: any): string[] {
+  return sel.map((l) => q.letterMap[l] || l);
+}
+function toShuffledLetters(sel: string[], q: any): string[] {
+  const reverse: Record<string, string> = {};
+  Object.entries(q.letterMap).forEach(([nl, ol]) => {
+    reverse[ol as string] = nl;
+  });
+  return sel.map((l) => reverse[l] || l);
 }
 
 export default function QuizPlay() {
@@ -121,7 +130,7 @@ export default function QuizPlay() {
     setSelected((prev) => (prev.includes(letter) ? prev.filter((l) => l !== letter) : [...prev, letter]));
   };
 
-    const validate = () => {
+  const validate = () => {
     if (selected.length === 0 || !current) return;
     setAnswered(true);
     const newAnswers = { ...answers, [current.id]: selected };
@@ -130,17 +139,30 @@ export default function QuizPlay() {
     const d = discordanceCount(selected, current.correct, letters);
     if (d === 0) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     else Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
-    apiFetch("/quizzes/answer", { body: { quiz_id: quizId, question_id: current.id, selected } }).catch(() => {});
+    const originalSelected = toOriginalLetters(selected, current);
+    apiFetch("/quizzes/answer", { body: { quiz_id: quizId, question_id: current.id, selected: originalSelected } }).catch(() => {});
   };
 
-  const submitAll = async (finalAnswers: Record<string, string[]>) => {
+    const submitAll = async (finalAnswers: Record<string, string[]>) => {
     setSubmitting(true);
     try {
-      const res = await apiFetch<SubmitResult>("/quizzes/submit", { body: { quiz_id: quizId, answers: finalAnswers } });
-      setResult(res);
+      const byId: Record<string, any> = Object.fromEntries(questions.map((q) => [q.id, q]));
+      const translatedAnswers: Record<string, string[]> = {};
+      Object.entries(finalAnswers).forEach(([qid, sel]) => {
+        const q = byId[qid];
+        translatedAnswers[qid] = q ? toOriginalLetters(sel, q) : sel;
+      });
+      const res = await apiFetch<SubmitResult>("/quizzes/submit", { body: { quiz_id: quizId, answers: translatedAnswers } });
+      const translatedResults = res.results.map((r) => {
+        const q = byId[r.question_id];
+        return q
+          ? { ...r, selected: toShuffledLetters(r.selected, q), correct: toShuffledLetters(r.correct, q) }
+          : r;
+      });
+      setResult({ ...res, results: translatedResults });
       setFinished(true);
       qc.invalidateQueries({ queryKey: ["review-topics"] });
-            qc.invalidateQueries({ queryKey: ["attempts"] });
+      qc.invalidateQueries({ queryKey: ["attempts"] });
       storage.removeItem(progressKey(quizId!)).catch(() => {});
     } catch (e: any) {
       toast.show(e.message || "Erreur d'enregistrement", "error");
