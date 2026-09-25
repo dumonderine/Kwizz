@@ -1,5 +1,6 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
+import { useMemo } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@react-native-vector-icons/ionicons";
@@ -7,8 +8,20 @@ import Ionicons from "@react-native-vector-icons/ionicons";
 import { apiFetch } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { useToast } from "@/src/components/toast";
+import { longDate, ymd } from "@/src/dates";
 import { usesNativeTabs } from "@/src/navigation";
 import { fonts, makeStyles, useTheme } from "@/src/theme";
+
+type JEvent = {
+  id: string;
+  date: string;
+  offset: number;
+  label: string;
+  folder_id: string;
+  folder_name: string;
+  topic_name: string;
+  color: string;
+};
 
 export default function Accueil() {
   const styles = useStyles();
@@ -18,6 +31,8 @@ export default function Accueil() {
   const toast = useToast();
   const { user } = useAuth();
 
+  const today = useMemo(() => new Date(), []);
+
   const anchorEnabled = user?.anchor_enabled !== false;
   const anchorSize = user?.anchor_size ?? 40;
   const bottomChrome = usesNativeTabs ? insets.bottom : 0;
@@ -26,6 +41,11 @@ export default function Accueil() {
     mutationFn: () => apiFetch<{ id: string }>("/anchor/daily", { body: {} }),
     onSuccess: (quiz) => router.push(`/quiz/play?quizId=${quiz.id}`),
     onError: (e: any) => toast.show(e.message, "error"),
+  });
+
+  const todayEventsQ = useQuery({
+    queryKey: ["j-events-today", ymd(today)],
+    queryFn: () => apiFetch<JEvent[]>(`/j/events?start=${ymd(today)}&end=${ymd(today)}`),
   });
 
   const AnchorCard = anchorEnabled ? (
@@ -38,7 +58,12 @@ export default function Accueil() {
         {anchor.isPending ? (
           <ActivityIndicator color={colors.onBrandSecondary} />
         ) : (
-          <Ionicons name="flame" size={26} color="#F97316" style={{ textShadowColor: "rgba(194,65,12,0.6)", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 }} />
+          <Ionicons
+            name="flame"
+            size={26}
+            color="#F97316"
+            style={{ textShadowColor: "rgba(194,65,12,0.6)", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 }}
+          />
         )}
       </View>
       <View style={{ flex: 1 }}>
@@ -66,14 +91,24 @@ export default function Accueil() {
           style={({ pressed }) => [styles.reviewCard, pressed && styles.pressed]}
           onPress={() => router.push("/calendar")}
         >
-          <View style={styles.reviewIcon}>
-            <Ionicons name="calendar" size={24} color={colors.brandPrimary} />
+          <View style={styles.reviewHeader}>
+            <Text style={styles.reviewDate}>{longDate(today)}</Text>
+            <Ionicons name="chevron-forward" size={20} color={colors.muted} />
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.cardTitle}>Révisions du jour</Text>
-            <Text style={styles.cardMeta}>Voir votre planning de la semaine</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color={colors.muted} />
+
+          {todayEventsQ.isLoading ? (
+            <ActivityIndicator color={colors.brandPrimary} />
+          ) : todayEventsQ.data && todayEventsQ.data.length > 0 ? (
+            <View style={styles.reviewTags}>
+              {todayEventsQ.data.map((e) => (
+                <View key={e.id} style={[styles.reviewTag, { backgroundColor: e.color }]}>
+                  <Text style={styles.reviewTagText}>{e.label} {e.folder_name}</Text>
+                </View>
+              ))}
+            </View>
+          ) : (
+            <Text style={styles.reviewEmpty}>Aucune révision programmée aujourd'hui</Text>
+          )}
         </Pressable>
       </ScrollView>
     </View>
@@ -89,7 +124,7 @@ const useStyles = makeStyles((colors) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: 14,
-    backgroundColor: "#c5c8c7",
+    backgroundColor: "#E5E7EB",
     borderRadius: 18,
     padding: 18,
     minHeight: 170,
@@ -99,16 +134,17 @@ const useStyles = makeStyles((colors) => ({
   anchorTitle: { fontSize: 17, fontFamily: fonts.extrabold, color: colors.onSurface },
   anchorSub: { fontSize: 13, fontFamily: fonts.regular, color: colors.muted, marginTop: 2 },
   reviewCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 14,
     backgroundColor: colors.surface,
     borderRadius: 16,
-    padding: 14,
+    padding: 16,
     borderWidth: 1,
     borderColor: colors.border,
+    gap: 10,
   },
-  reviewIcon: { width: 46, height: 46, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: colors.brandTertiary },
-  cardTitle: { fontSize: 17, fontFamily: fonts.bold, color: colors.onSurface },
-  cardMeta: { fontSize: 13, fontFamily: fonts.regular, color: colors.muted, marginTop: 2 },
+  reviewHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  reviewDate: { fontSize: 17, fontFamily: fonts.bold, color: colors.onSurface, textTransform: "capitalize" },
+  reviewTags: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  reviewTag: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+  reviewTagText: { fontSize: 13, fontFamily: fonts.extrabold, color: "#ffffff" },
+  reviewEmpty: { fontSize: 14, fontFamily: fonts.regular, color: colors.muted },
 }));
