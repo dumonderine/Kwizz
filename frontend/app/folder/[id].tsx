@@ -387,7 +387,11 @@ export default function FolderDetail() {
               ))}
             </View>
           ) : (
-            <Text style={styles.hint}>Ajoutez vos cours (PDF, photos ou texte) pour générer des QCM.</Text>
+            <Text style={styles.hint}>
+              {isTopLevel
+                ? "Dépose ton annale corrigée (avec les bonnes réponses cochées) et refais-la ici, sans changer une seule question."
+                : "Ajoutez vos cours (PDF, photos ou texte) pour générer des QCM."}
+            </Text>
           )}
         </View>
 
