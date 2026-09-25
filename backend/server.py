@@ -177,6 +177,12 @@ class SubmitIn(BaseModel):
     answers: Dict[str, List[str]]
 
 
+class AnswerIn(BaseModel):
+    quiz_id: str
+    question_id: str
+    answers: List[str]
+
+
 class ChatIn(BaseModel):
     folder_id: Optional[str] = None
     question: str
@@ -1130,6 +1136,61 @@ def score_question(selected: List[str], correct: List[str], options: dict) -> tu
     return 0.0, discordance
 
 
+async def add_to_review(user_id: str, question: dict, quiz_folder_id: Optional[str], pts: float):
+    if pts >= 1.0:
+        return
+    quiz_origin = await folder_meta(quiz_folder_id)
+    o_folder_id = question.get("origin_folder_id", quiz_origin["folder_id"])
+    o_folder_name = question.get("origin_folder_name", quiz_origin["folder_name"])
+    o_topic_id = question.get("origin_topic_folder_id", quiz_origin["topic_folder_id"])
+    o_topic_name = question.get("origin_topic_name", quiz_origin["topic_name"])
+    now = datetime.now(timezone.utc).isoformat()
+    existing = await db.review_items.find_one({"owner_id": user_id, "question.q": question["q"]})
+    if existing:
+        await db.review_items.update_one(
+            {"id": existing["id"]},
+            {"$set": {"resolved": False, "updated_at": now, "last_points": pts},
+             "$inc": {"wrong_count": 1}},
+        )
+    else:
+        await db.review_items.insert_one({
+            "id": str(uuid.uuid4()),
+            "owner_id": user_id,
+            "question": {
+                "q": question["q"],
+                "options": question["options"],
+                "correct": question["correct"],
+                "explanation": question["explanation"],
+                "origin_folder_id": o_folder_id,
+                "origin_folder_name": o_folder_name,
+                "origin_topic_folder_id": o_topic_id,
+                "origin_topic_name": o_topic_name,
+            },
+            "folder_id": o_folder_id,
+            "folder_name": o_folder_name,
+            "topic_folder_id": o_topic_id,
+            "topic_name": o_topic_name,
+            "wrong_count": 1,
+            "last_points": pts,
+            "resolved": False,
+            "created_at": now,
+            "updated_at": now,
+        })
+
+
+@api_router.post("/quizzes/answer")
+async def answer_question(data: AnswerIn, user: dict = Depends(current_user)):
+    qz = await db.quizzes.find_one({"id": data.quiz_id, "owner_id": user["id"], "deleted_at": None})
+    if not qz:
+        raise HTTPException(status_code=404, detail="QCM introuvable")
+    question = next((q for q in qz.get("questions", []) if q["id"] == data.question_id), None)
+    if not question:
+        raise HTTPException(status_code=404, detail="Question introuvable")
+    pts, disc = score_question(data.answers, question["correct"], question["options"])
+    await add_to_review(user["id"], question, qz.get("folder_id"), pts)
+    return {"points": pts, "discordance": disc, "correct": question["correct"]}
+
+
 @api_router.post("/quizzes/submit")
 async def submit_quiz(data: SubmitIn, user: dict = Depends(current_user)):
     qz = await db.quizzes.find_one({"id": data.quiz_id, "owner_id": user["id"], "deleted_at": None})
@@ -1166,46 +1227,6 @@ async def submit_quiz(data: SubmitIn, user: dict = Depends(current_user)):
         )
         if pts < 1.0:
             review_added += 1
-            # Prefer per-question origin (anchor quizzes mix many folders).
-            o_folder_id = question.get("origin_folder_id", quiz_origin["folder_id"])
-            o_folder_name = question.get("origin_folder_name", quiz_origin["folder_name"])
-            o_topic_id = question.get("origin_topic_folder_id", quiz_origin["topic_folder_id"])
-            o_topic_name = question.get("origin_topic_name", quiz_origin["topic_name"])
-            existing = await db.review_items.find_one(
-                {"owner_id": user["id"], "question.q": question["q"]}
-            )
-            if existing:
-                await db.review_items.update_one(
-                    {"id": existing["id"]},
-                    {"$set": {"resolved": False, "updated_at": now, "last_points": pts},
-                     "$inc": {"wrong_count": 1}},
-                )
-            else:
-                await db.review_items.insert_one(
-                    {
-                        "id": str(uuid.uuid4()),
-                        "owner_id": user["id"],
-                        "question": {
-                            "q": question["q"],
-                            "options": question["options"],
-                            "correct": question["correct"],
-                            "explanation": question["explanation"],
-                            "origin_folder_id": o_folder_id,
-                            "origin_folder_name": o_folder_name,
-                            "origin_topic_folder_id": o_topic_id,
-                            "origin_topic_name": o_topic_name,
-                        },
-                        "folder_id": o_folder_id,
-                        "folder_name": o_folder_name,
-                        "topic_folder_id": o_topic_id,
-                        "topic_name": o_topic_name,
-                        "wrong_count": 1,
-                        "last_points": pts,
-                        "resolved": False,
-                        "created_at": now,
-                        "updated_at": now,
-                    }
-                )
 
     n = len(qz.get("questions", [])) or 1
     grade_on_20 = round((total / n) * 20, 2)
