@@ -64,6 +64,16 @@ export default function QuizPlay() {
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<SubmitResult | null>(null);
   const [showMissed, setShowMissed] = useState(false);
+  const [flagged, setFlagged] = useState<Record<string, boolean>>({});
+  const flagReview = useMutation({
+    mutationFn: (questionId: string) =>
+      apiFetch("/quizzes/flag-review", { body: { quiz_id: quizId, question_id: questionId } }),
+    onSuccess: (_data, questionId) => {
+      setFlagged((prev) => ({ ...prev, [questionId]: true }));
+      qc.invalidateQueries({ queryKey: ["review-topics"] });
+    },
+    onError: (e: any) => toast.show(e.message || "Erreur", "error"),
+  });
 
   const questions = quiz?.questions || [];
   const current = questions[index];
@@ -297,6 +307,23 @@ export default function QuizPlay() {
                 : `⚠️ ${dCount} discordance${dCount > 1 ? "s" : ""}${ptTxt} (attendu : ${current.correct.join(", ")})`}
             </Text>
             <Text style={styles.explText}>{current.explanation}</Text>
+              {dCount === 0 ? (
+              <Pressable
+                style={styles.askAI}
+                onPress={() => !flagged[current.id] && flagReview.mutate(current.id)}
+                disabled={flagged[current.id] || flagReview.isPending}
+                testID="flag-review"
+              >
+                <Ionicons
+                  name={flagged[current.id] ? "checkmark-circle" : "add-circle-outline"}
+                  size={16}
+                  color={colors.brandPrimary}
+                />
+                <Text style={styles.askAIText}>
+                  {flagged[current.id] ? "Ajoutée aux QCM à revoir" : "Ajouter quand même aux QCM à revoir"}
+                </Text>
+              </Pressable>
+            ) : null}
             <Pressable style={styles.askAI} onPress={askAI} testID="ask-ai-inline">
               <Ionicons name="sparkles" size={16} color={colors.brandPrimary} />
               <Text style={styles.askAIText}>Demander plus d'explications à l'IA</Text>
