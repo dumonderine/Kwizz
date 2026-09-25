@@ -83,6 +83,7 @@ export default function QuizPlay() {
     const d = discordanceCount(selected, current.correct, letters);
     if (d === 0) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     else Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+    apiFetch("/quizzes/answer", { body: { quiz_id: quizId, question_id: current.id, selected } }).catch(() => {});
   };
 
   const submitAll = async (finalAnswers: Record<string, string[]>) => {
