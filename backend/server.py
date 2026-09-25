@@ -180,7 +180,7 @@ class SubmitIn(BaseModel):
 class AnswerIn(BaseModel):
     quiz_id: str
     question_id: str
-    answers: List[str]
+    selected: List[str]
 
 
 class ChatIn(BaseModel):
@@ -1188,7 +1188,7 @@ async def answer_question(data: AnswerIn, user: dict = Depends(current_user)):
     question = next((q for q in qz.get("questions", []) if q["id"] == data.question_id), None)
     if not question:
         raise HTTPException(status_code=404, detail="Question introuvable")
-    pts, disc = score_question(data.answers, question["correct"], question["options"])
+    pts, disc = score_question(data.selected, question["correct"], question["options"])
     await add_to_review(user["id"], question, qz.get("folder_id"), pts)
     return {"points": pts, "discordance": disc, "correct": question["correct"]}
 
@@ -1356,7 +1356,6 @@ async def course_chat(data: ChatIn, user: dict = Depends(current_user)):
     return {"answer": answer}
 
 
-@api_router.get("/")
 def build_annale_prompt() -> str:
     return (
         "Le document fourni est une annale d'examen DÉJÀ CORRIGÉE (les bonnes réponses sont cochées, "
@@ -1483,6 +1482,52 @@ async def generate_annale_quiz(
     await db.generation_jobs.insert_one(job)
     asyncio.create_task(run_annale_job(job["id"], content, mime, ext))
     return clean(job)
+
+@api_router.get("/")
+class CombineIn(BaseModel):
+    folder_id: str
+
+class CombineIn(BaseModel):
+    folder_id: str
+
+
+@api_router.post("/quizzes/combine")
+async def combine_quizzes(data: CombineIn, user: dict = Depends(current_user)):
+    root = await db.folders.find_one({"id": data.folder_id, "owner_id": user["id"], "deleted_at": None})
+    if not root:
+        raise HTTPException(status_code=404, detail="Dossier introuvable")
+    folder_ids = await gather_folder_ids(data.folder_id, user["id"])
+    quizzes = await db.quizzes.find(
+        {"folder_id": {"$in": folder_ids}, "owner_id": user["id"], "deleted_at": None}
+    ).to_list(500)
+
+    questions: List[dict] = []
+    seen = set()
+    for qz in quizzes:
+        for q in qz.get("questions", []):
+            key = q["q"].strip().lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            questions.append(q)
+
+    if not questions:
+        raise HTTPException(status_code=400, detail="Aucun QCM à regrouper pour le moment.")
+
+    quiz = {
+        "id": str(uuid.uuid4()),
+        "owner_id": user["id"],
+        "folder_id": data.folder_id,
+        "title": f"Tous les QCM · {root['name']}",
+        "kind": "combined",
+        "questions": questions,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "deleted_at": None,
+    }
+    await db.quizzes.insert_one(quiz)
+    return clean(quiz)
+    
+@api_router.post("/quizzes/combine")
 async def root():
     return {"message": "EDN Prep API"}
 
