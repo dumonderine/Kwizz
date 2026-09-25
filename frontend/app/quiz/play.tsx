@@ -389,7 +389,7 @@ const useStyles = makeStyles((colors) => ({
   },
   optSuccess: { backgroundColor: colors.successSurface, borderRadius: 14, padding: 14, borderWidth: 2, borderColor: colors.success },
   optError: { backgroundColor: colors.errorSurface, borderRadius: 14, padding: 14, borderWidth: 2, borderColor: colors.error },
-  optWarning: { backgroundColor: colors.warningSurface, borderRadius: 14, padding: 14, borderWidth: 2, borderColor: colors.warning, borderStyle: "dashed" },
+  optWarning: { backgroundColor: colors.successSurface, borderRadius: 14, padding: 14, borderWidth: 2, borderColor: colors.warning, borderStyle: "dashed" },
   optMuted: { backgroundColor: colors.surface, borderRadius: 14, padding: 14, borderWidth: 2, borderColor: colors.border, opacity: 0.55 },
   optRow: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
   checkbox: {
