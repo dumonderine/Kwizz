@@ -72,4 +72,29 @@ export async function uploadSource(
   const data = text ? JSON.parse(text) : null;
   if (!res.ok) throw new Error((data && data.detail) || "Échec de l'envoi");
   return data;
+  
+export async function uploadAnnale(
+  folderId: string,
+  file: { uri: string; name: string; type: string },
+  Platform: { OS: string },
+): Promise<any> {
+  const token = await getToken();
+  const form = new FormData();
+  form.append("folder_id", folderId);
+  if (Platform.OS === "web") {
+    const blob = await (await fetch(file.uri)).blob();
+    form.append("file", blob, file.name);
+  } else {
+    form.append("file", { uri: file.uri, name: file.name, type: file.type } as any);
+  }
+  const res = await fetch(`${API}/quizzes/generate-annale`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!res.ok) throw new Error((data && data.detail) || "Échec de l'envoi");
+  return data;
+}
 }
