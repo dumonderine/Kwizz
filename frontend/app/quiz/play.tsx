@@ -6,6 +6,7 @@ import { ActivityIndicator, Platform, Pressable, ScrollView, Text, View } from "
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@react-native-vector-icons/ionicons";
 
+import { apiFetch } from "@/src/api";
 import { storage } from "@/src/utils/storage";
 import { useAuth } from "@/src/auth";
 import { Button } from "@/src/components/button";
