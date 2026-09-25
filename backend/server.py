@@ -1263,19 +1263,16 @@ async def review_topics(user: dict = Depends(current_user)):
     items = await db.review_items.find({"owner_id": user["id"], "resolved": False}).to_list(2000)
     groups: Dict[str, dict] = {}
     for it in items:
-        # Group by the exact origin sub-folder so wrong questions land in
-        # e.g. "Neurologie › Chapitre 3", not just the top topic.
-        fid = it.get("folder_id") or it.get("topic_folder_id") or "general"
+        # Group by the topic (matière) so all its chapters share one entry.
+        fid = it.get("topic_folder_id") or it.get("folder_id") or "general"
         if fid not in groups:
             topic = it.get("topic_name", "Général")
-            folder = it.get("folder_name", topic)
-            label = folder if folder == topic else f"{topic} › {folder}"
             groups[fid] = {
-                "folder_id": it.get("folder_id"),
+                "folder_id": None,
                 "topic_folder_id": it.get("topic_folder_id"),
-                "folder_name": it.get("folder_name", topic),
+                "folder_name": topic,
                 "topic_name": topic,
-                "label": label,
+                "label": topic,
                 "count": 0,
             }
         groups[fid]["count"] += 1
