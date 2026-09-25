@@ -368,12 +368,7 @@ export default function QuizPlay() {
             </View>
           </>
         ) : null}
-            <Pressable style={styles.askAI} onPress={askAI} testID="ask-ai-inline">
-              <Ionicons name="sparkles" size={16} color={colors.brandPrimary} />
-              <Text style={styles.askAIText}>Demander plus d'explications à l'IA</Text>
-            </Pressable>
-          </View>
-        ) : null}
+        
       </ScrollView>
 
       {/* Sticky CTA */}
