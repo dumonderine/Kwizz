@@ -1,12 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@react-native-vector-icons/ionicons";
 
-import { apiFetch } from "@/src/api";
+import { storage } from "@/src/utils/storage";
 import { useAuth } from "@/src/auth";
 import { Button } from "@/src/components/button";
 import { useToast } from "@/src/components/toast";
@@ -55,6 +55,9 @@ function shuffleOptions(q: Question): Question {
   });
   return { ...q, options, correct };
 }
+function progressKey(id: string) {
+  return `quiz_progress_${id}`;
+}
 
 export default function QuizPlay() {
   const { quizId } = useLocalSearchParams<{ quizId: string }>();
@@ -90,7 +93,23 @@ export default function QuizPlay() {
     onError: (e: any) => toast.show(e.message || "Erreur", "error"),
   });
 
-  const questions = useMemo(() => (quiz?.questions || []).map(shuffleOptions), [quiz?.id]);
+    const questions = useMemo(() => (quiz?.questions || []).map(shuffleOptions), [quiz?.id]);
+
+  useEffect(() => {
+    if (!quiz) return;
+    (async () => {
+      const raw = await storage.getItem<string>(progressKey(quiz.id), "");
+      if (!raw) return;
+      try {
+        const saved = JSON.parse(raw) as { index: number; answers: Record<string, string[]> };
+        if (saved.index > 0 && saved.index < quiz.questions.length) {
+          setIndex(saved.index);
+          setAnswers(saved.answers || {});
+        }
+      } catch {}
+    })();
+  }, [quiz?.id]);
+
   const current = questions[index];
   const letters = useMemo(() => (current ? Object.keys(current.options) : []), [current]);
   const total = questions.length;
@@ -101,10 +120,12 @@ export default function QuizPlay() {
     setSelected((prev) => (prev.includes(letter) ? prev.filter((l) => l !== letter) : [...prev, letter]));
   };
 
-  const validate = () => {
+    const validate = () => {
     if (selected.length === 0 || !current) return;
     setAnswered(true);
-    setAnswers((prev) => ({ ...prev, [current.id]: selected }));
+    const newAnswers = { ...answers, [current.id]: selected };
+    setAnswers(newAnswers);
+    storage.setItem(progressKey(quizId!), JSON.stringify({ index: index + 1, answers: newAnswers })).catch(() => {});
     const d = discordanceCount(selected, current.correct, letters);
     if (d === 0) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     else Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
@@ -118,7 +139,8 @@ export default function QuizPlay() {
       setResult(res);
       setFinished(true);
       qc.invalidateQueries({ queryKey: ["review-topics"] });
-      qc.invalidateQueries({ queryKey: ["attempts"] });
+            qc.invalidateQueries({ queryKey: ["attempts"] });
+      storage.removeItem(progressKey(quizId!)).catch(() => {});
     } catch (e: any) {
       toast.show(e.message || "Erreur d'enregistrement", "error");
     } finally {
