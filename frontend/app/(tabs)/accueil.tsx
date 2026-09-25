@@ -70,7 +70,7 @@ export default function Accueil() {
         <Text style={styles.anchorTitle}>Ancrage du jour</Text>
         <Text style={styles.anchorSub}>{anchorSize} QCM tirés au hasard dans toutes vos matières</Text>
       </View>
-      <Ionicons name="play-circle" size={30} color={colors.onBrandSecondary} />
+      <Ionicons name="play-circle" size={30} color="#000" />
     </Pressable>
   ) : null;
 
