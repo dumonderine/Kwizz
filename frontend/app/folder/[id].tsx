@@ -72,6 +72,7 @@ export default function FolderDetail() {
   const [textName, setTextName] = useState("");
   const [textBody, setTextBody] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [showAnnale, setShowAnnale] = useState(false);
 
   const folderQ = useQuery({ queryKey: ["folder", id], queryFn: () => apiFetch<Folder>(`/folders/${id}`) });
   const subsQ = useQuery({ queryKey: ["folders", id], queryFn: () => apiFetch<SubFolder[]>(`/folders?parent_id=${id}`) });
@@ -80,6 +81,7 @@ export default function FolderDetail() {
   const schedQ = useQuery({ queryKey: ["j-schedule", id], queryFn: () => apiFetch<JSchedule | null>(`/j/schedules/${id}`) });
 
   const folderColor = folderQ.data?.color || DEFAULT_FOLDER_COLOR;
+  const isTopLevel = (folderQ.data?.breadcrumb?.length ?? 0) <= 1;
   const derivedSubColor = lighten(folderColor);
 
   const invalidate = () => {
@@ -237,7 +239,47 @@ export default function FolderDetail() {
     const a = res.assets[0];
     await doUpload(a.uri, a.fileName || "photo.jpg", a.mimeType || "image/jpeg");
   };
+  const doUploadAnnale = async (uri: string, name: string, type: string) => {
+    setShowAnnale(false);
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("folder_id", id!);
+      form.append("file", { uri, name, type } as any);
+      const job = await apiFetch<GenJob>("/quizzes/generate-annale", { method: "POST", body: form });
+      setJobId(job.id);
+      qc.invalidateQueries({ queryKey: ["gen-jobs", id] });
+    } catch (e: any) {
+      toast.show(e.message || "Échec de l'envoi", "error");
+    } finally {
+      setUploading(false);
+    }
+  };
 
+  const pickAnnalePdf = async () => {
+    const res = await DocumentPicker.getDocumentAsync({ type: "application/pdf", copyToCacheDirectory: true });
+    if (res.canceled || !res.assets?.[0]) return;
+    const a = res.assets[0];
+    await doUploadAnnale(a.uri, a.name || "annale.pdf", a.mimeType || "application/pdf");
+  };
+
+  const pickAnnaleImage = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      if (!perm.canAskAgain) {
+        toast.show("Autorisez l'accès aux photos dans les réglages", "error");
+        Linking.openSettings();
+      } else {
+        toast.show("Accès aux photos refusé", "error");
+      }
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.7 });
+    if (res.canceled || !res.assets?.[0]) return;
+    const a = res.assets[0];
+    await doUploadAnnale(a.uri, a.fileName || "annale.jpg", a.mimeType || "image/jpeg");
+  };
+  
   const doUpload = async (uri: string, name: string, type: string) => {
     setUploading(true);
     try {
@@ -308,11 +350,17 @@ export default function FolderDetail() {
           )}
         </View>
 
-        {/* Sources */}
+           {/* Sources */}
         <View style={styles.section}>
           <View style={styles.sectionHead}>
-            <Text style={styles.sectionTitle}>Sources (cours & annales)</Text>
-            <Pressable onPress={() => setShowAdd(true)} testID="add-source" hitSlop={8}>
+            <Text style={styles.sectionTitle}>
+              {isTopLevel ? "Annales" : "Sources (cours & annales)"}
+            </Text>
+            <Pressable
+              onPress={() => (isTopLevel ? setShowAnnale(true) : setShowAdd(true))}
+              testID="add-source"
+              hitSlop={8}
+            >
               <Ionicons name="add-circle" size={26} color={folderColor} />
             </Pressable>
           </View>
@@ -515,6 +563,30 @@ export default function FolderDetail() {
         </View>
       </Modal>
 
+      {/* Add annale options */}
+      <Modal visible={showAnnale} transparent animationType="slide" onRequestClose={() => setShowAnnale(false)}>
+        <Pressable style={styles.backdrop} onPress={() => setShowAnnale(false)} />
+        <View style={styles.sheet}>
+          <View style={styles.handle} />
+          <Text style={styles.sheetTitle}>Ajouter une annale</Text>
+          <Text style={[styles.hint, { marginBottom: 16 }]}>
+            Dépose ton annale corrigée (avec les bonnes réponses cochées) et refais-la ici, sans
+            changer une seule question.
+          </Text>
+          <Pressable style={styles.opt} onPress={pickAnnalePdf} testID="add-annale-pdf">
+            <Ionicons name="document-text" size={24} color={colors.brandPrimary} />
+            <Text style={styles.optText}>Importer un PDF corrigé</Text>
+          </Pressable>
+          <Pressable style={styles.opt} onPress={pickAnnaleImage} testID="add-annale-photo">
+            <Ionicons name="image" size={24} color={colors.brandPrimary} />
+            <Text style={styles.optText}>Photo d'une annale corrigée</Text>
+          </Pressable>
+          <Pressable onPress={() => setShowAnnale(false)} style={{ marginTop: 4 }}>
+            <Text style={styles.cancel}>Annuler</Text>
+          </Pressable>
+        </View>
+      </Modal>
+      
       {/* Text source modal */}
       <Modal visible={showText} transparent animationType="slide" onRequestClose={() => setShowText(false)}>
         <Pressable style={styles.backdrop} onPress={() => setShowText(false)} />
