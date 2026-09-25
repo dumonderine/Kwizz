@@ -39,6 +39,22 @@ function pointsFor(d: number) {
 function fmt(n: number) {
   return Number.isInteger(n) ? `${n}` : n.toFixed(1).replace(".", ",");
 }
+function shuffleOptions(q: Question): Question {
+  const letters = Object.keys(q.options);
+  const texts = letters.map((l) => q.options[l]);
+  const correctTexts = new Set(q.correct.map((l) => q.options[l]));
+  for (let i = texts.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [texts[i], texts[j]] = [texts[j], texts[i]];
+  }
+  const options: Record<string, string> = {};
+  const correct: string[] = [];
+  letters.forEach((l, i) => {
+    options[l] = texts[i];
+    if (correctTexts.has(texts[i])) correct.push(l);
+  });
+  return { ...q, options, correct };
+}
 
 export default function QuizPlay() {
   const { quizId } = useLocalSearchParams<{ quizId: string }>();
@@ -74,7 +90,7 @@ export default function QuizPlay() {
     onError: (e: any) => toast.show(e.message || "Erreur", "error"),
   });
 
-  const questions = quiz?.questions || [];
+  const questions = useMemo(() => (quiz?.questions || []).map(shuffleOptions), [quiz?.id]);
   const current = questions[index];
   const letters = useMemo(() => (current ? Object.keys(current.options) : []), [current]);
   const total = questions.length;
