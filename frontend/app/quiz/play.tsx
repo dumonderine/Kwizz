@@ -279,8 +279,8 @@ export default function QuizPlay() {
           {letters.map((l) => (
             <Pressable key={l} style={optStyle(l)} onPress={() => toggle(l)} testID={`option-${l}`}>
               <View style={styles.optRow}>
-                <View style={[styles.checkbox, selected.includes(l) && !answered && styles.checkboxOn]}>
-                  {selected.includes(l) ? <Ionicons name="checkmark" size={14} color="#fff" /> : null}
+                <View style={[styles.checkbox, selected.includes(l) && styles.checkboxOn]}>
+                  {selected.includes(l) ? <Ionicons name="checkmark" size={14} color="#000" /> : null}
                 </View>
                 <Text style={styles.optLetter}>{l}.</Text>
                 <Text style={styles.optText}>{current.options[l]}</Text>
