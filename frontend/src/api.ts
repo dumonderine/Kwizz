@@ -98,4 +98,4 @@ export async function uploadAnnale(
   if (!res.ok) throw new Error((data && data.detail) || "Échec de l'envoi");
   return data;
 }
-}
+
