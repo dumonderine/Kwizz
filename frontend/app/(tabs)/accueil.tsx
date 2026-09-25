@@ -38,7 +38,7 @@ export default function Accueil() {
         {anchor.isPending ? (
           <ActivityIndicator color={colors.onBrandSecondary} />
         ) : (
-          <Ionicons name="flame" size={26} color={colors.onBrandSecondary} />
+          <Ionicons name="flame" size={26} color="#F97316" style={{ textShadowColor: "rgba(194,65,12,0.6)", textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2 }} />
         )}
       </View>
       <View style={{ flex: 1 }}>
@@ -89,15 +89,15 @@ const useStyles = makeStyles((colors) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: 14,
-    backgroundColor: colors.brandSecondary,
+    backgroundColor: "#c5c8c7",
     borderRadius: 18,
     padding: 18,
     minHeight: 170,
   },
   pressed: { opacity: 0.7 },
   anchorIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" },
-  anchorTitle: { fontSize: 17, fontFamily: fonts.extrabold, color: colors.onBrandSecondary },
-  anchorSub: { fontSize: 13, fontFamily: fonts.regular, color: "rgba(255,255,255,0.8)", marginTop: 2 },
+  anchorTitle: { fontSize: 17, fontFamily: fonts.extrabold, color: colors.onSurface },
+  anchorSub: { fontSize: 13, fontFamily: fonts.regular, color: colors.muted, marginTop: 2 },
   reviewCard: {
     flexDirection: "row",
     alignItems: "center",
