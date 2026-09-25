@@ -837,7 +837,7 @@ def _parse_questions(raw: str) -> List[dict]:
     return out
 
 
-async def _generate_batch(system: str, prompt: str, file_contents: List) -> List[dict]:
+async def _generate_batch(system: str, prompt: str, file_contents: List, max_tokens: int = 16000) -> List[dict]:
     model = genai.GenerativeModel(model_name=GEN_MODEL.replace("gemini-", "models/gemini-") if not GEN_MODEL.startswith("models/") else GEN_MODEL, system_instruction=system)
     parts = [prompt]
     for fc in (file_contents or []):
@@ -846,7 +846,7 @@ async def _generate_batch(system: str, prompt: str, file_contents: List) -> List
     last_err: Optional[Exception] = None
     for _ in range(2):
         try:
-            resp = await run_in_threadpool(model.generate_content, parts, generation_config={"max_output_tokens": 16000})
+            resp = await run_in_threadpool(model.generate_content, parts, generation_config={"max_output_tokens": max_tokens})
             raw = resp.text
             return _parse_questions(raw)
         except Exception as e:
@@ -1357,6 +1357,132 @@ async def course_chat(data: ChatIn, user: dict = Depends(current_user)):
 
 
 @api_router.get("/")
+def build_annale_prompt() -> str:
+    return (
+        "Le document fourni est une annale d'examen DÉJÀ CORRIGÉE (les bonnes réponses sont cochées, "
+        "cerclées, surlignées ou marquées d'une croix sur le document).\n\n"
+        "Ta tâche : retranscrire TOUTES les questions de cette annale, MOT POUR MOT, sans rien inventer, "
+        "reformuler, raccourcir ni ajouter. Pour chaque question :\n"
+        "- Reprends l'énoncé exactement tel qu'il est écrit.\n"
+        "- Reprends chaque proposition telle qu'elle est écrite (garde le même nombre de propositions "
+        "que sur le document, même si ce n'est pas toujours 5).\n"
+        "- Identifie quelles propositions sont marquées comme correctes sur le document (coche, croix, "
+        "cercle, surlignage) et indique-les dans \"correct\".\n"
+        "- Si le document donne une explication ou un commentaire de correction, reprends-le tel quel "
+        "dans \"explanation\". Sinon, laisse \"explanation\" vide (\"\").\n"
+        "- Ne saute aucune question, même si l'écriture est difficile à lire : fais de ton mieux.\n\n"
+        "Réponds STRICTEMENT avec un tableau JSON valide, sans markdown, sans texte avant ou après, de "
+        "cet exact format:\n"
+        '[{"q":"énoncé","options":{"A":"...","B":"...","C":"...","D":"...","E":"..."},'
+        '"correct":["A","C"],"explanation":"..."}]\n'
+    )
+
+
+class _FileRef:
+    def __init__(self, file_path: str, mime_type: str):
+        self.file_path = file_path
+        self.mime_type = mime_type
+
+
+async def run_annale_job(job_id: str, content: bytes, mime: str, ext: str):
+    job = await db.generation_jobs.find_one({"id": job_id})
+    if not job:
+        return
+    tmp_path = None
+    try:
+        fd, tmp_path = tempfile.mkstemp(suffix=f".{ext}")
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(content)
+        await db.generation_jobs.update_one(
+            {"id": job_id}, {"$set": {"status": "running", "step": "L'IA relit votre annale…"}}
+        )
+
+        root = await db.folders.find_one({"id": job["folder_id"], "deleted_at": None})
+        user = await db.users.find_one({"id": job["owner_id"]})
+        system = (
+            "Tu es un assistant rigoureux qui retranscrit des annales d'examen corrigées, sans jamais "
+            "inventer ni reformuler le contenu. Tu réponds UNIQUEMENT en JSON valide, sans texte autour."
+        )
+        file_contents = [_FileRef(file_path=tmp_path, mime_type=mime)]
+
+        raw_questions = await _generate_batch(system, build_annale_prompt(), file_contents, max_tokens=32000)
+        if not raw_questions:
+            raise RuntimeError("Aucune question détectée dans cette annale, réessayez avec une version plus lisible.")
+
+        origin = await folder_meta(job["folder_id"])
+        questions = [
+            dict(
+                q,
+                id=str(uuid.uuid4()),
+                origin_folder_id=origin["folder_id"],
+                origin_folder_name=origin["folder_name"],
+                origin_topic_folder_id=origin["topic_folder_id"],
+                origin_topic_name=origin["topic_name"],
+            )
+            for q in raw_questions
+        ]
+
+        quiz = {
+            "id": str(uuid.uuid4()),
+            "owner_id": job["owner_id"],
+            "folder_id": job["folder_id"],
+            "title": f"Annale · {root['name']}",
+            "kind": "annale",
+            "questions": questions,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "deleted_at": None,
+        }
+        await db.quizzes.insert_one(quiz)
+        await ensure_schedule(root, job["owner_id"])
+        await db.generation_jobs.update_one(
+            {"id": job_id},
+            {"$set": {"status": "done", "quiz_id": quiz["id"], "question_count": len(quiz["questions"]),
+                      "finished_at": datetime.now(timezone.utc).isoformat()}},
+        )
+    except Exception as e:
+        logger.exception("annale job %s failed", job_id)
+        await db.generation_jobs.update_one(
+            {"id": job_id},
+            {"$set": {"status": "error", "error": str(e) or "La lecture de l'annale a échoué, réessayez.",
+                      "finished_at": datetime.now(timezone.utc).isoformat()}},
+        )
+    finally:
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
+@api_router.post("/quizzes/generate-annale")
+async def generate_annale_quiz(
+    folder_id: str = Form(...),
+    file: UploadFile = File(...),
+    user: dict = Depends(current_user),
+):
+    root = await db.folders.find_one({"id": folder_id, "owner_id": user["id"], "deleted_at": None})
+    if not root:
+        raise HTTPException(status_code=404, detail="Dossier introuvable")
+
+    content = await file.read()
+    ext = (file.filename or "annale").split(".")[-1].lower()
+    mime = file.content_type or "application/octet-stream"
+
+    job = {
+        "id": str(uuid.uuid4()),
+        "owner_id": user["id"],
+        "folder_id": folder_id,
+        "num_questions": 0,
+        "kind": "annale",
+        "status": "pending",
+        "step": "Lecture de l'annale…",
+        "quiz_id": None,
+        "error": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.generation_jobs.insert_one(job)
+    asyncio.create_task(run_annale_job(job["id"], content, mime, ext))
+    return clean(job)
 async def root():
     return {"message": "EDN Prep API"}
 
