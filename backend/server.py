@@ -1189,7 +1189,13 @@ async def answer_question(data: AnswerIn, user: dict = Depends(current_user)):
     if not question:
         raise HTTPException(status_code=404, detail="Question introuvable")
     pts, disc = score_question(data.selected, question["correct"], question["options"])
-    await add_to_review(user["id"], question, qz.get("folder_id"), pts)
+    if pts >= 1.0:
+        await db.review_items.update_many(
+            {"owner_id": user["id"], "question.q": question["q"], "resolved": False},
+            {"$set": {"resolved": True}},
+        )
+    else:
+        await add_to_review(user["id"], question, qz.get("folder_id"), pts)
     return {"points": pts, "discordance": disc, "correct": question["correct"]}
 
 
