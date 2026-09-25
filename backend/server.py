@@ -1483,10 +1483,6 @@ async def generate_annale_quiz(
     asyncio.create_task(run_annale_job(job["id"], content, mime, ext))
     return clean(job)
 
-@api_router.get("/")
-class CombineIn(BaseModel):
-    folder_id: str
-
 class CombineIn(BaseModel):
     folder_id: str
 
@@ -1526,8 +1522,47 @@ async def combine_quizzes(data: CombineIn, user: dict = Depends(current_user)):
     }
     await db.quizzes.insert_one(quiz)
     return clean(quiz)
-    
-@api_router.post("/quizzes/combine")
+
+class FlagReviewIn(BaseModel):
+    quiz_id: str
+    question_id: str
+
+
+@api_router.post("/quizzes/flag-review")
+async def flag_review(data: FlagReviewIn, user: dict = Depends(current_user)):
+    qz = await db.quizzes.find_one({"id": data.quiz_id, "owner_id": user["id"], "deleted_at": None})
+    if not qz:
+        raise HTTPException(status_code=404, detail="QCM introuvable")
+    question = next((q for q in qz.get("questions", []) if q["id"] == data.question_id), None)
+    if not question:
+        raise HTTPException(status_code=404, detail="Question introuvable")
+
+    quiz_origin = await folder_meta(qz.get("folder_id"))
+    o_folder_id = question.get("origin_folder_id", quiz_origin["folder_id"])
+    o_folder_name = question.get("origin_folder_name", quiz_origin["folder_name"])
+    o_topic_id = question.get("origin_topic_folder_id", quiz_origin["topic_folder_id"])
+    o_topic_name = question.get("origin_topic_name", quiz_origin["topic_name"])
+    now = datetime.now(timezone.utc).isoformat()
+
+    existing = await db.review_items.find_one({"owner_id": user["id"], "question.q": question["q"]})
+    if existing:
+        await db.review_items.update_one({"id": existing["id"]}, {"$set": {"resolved": False, "updated_at": now}})
+    else:
+        await db.review_items.insert_one({
+            "id": str(uuid.uuid4()), "owner_id": user["id"],
+            "question": {
+                "q": question["q"], "options": question["options"], "correct": question["correct"],
+                "explanation": question["explanation"], "origin_folder_id": o_folder_id,
+                "origin_folder_name": o_folder_name, "origin_topic_folder_id": o_topic_id,
+                "origin_topic_name": o_topic_name,
+            },
+            "folder_id": o_folder_id, "folder_name": o_folder_name, "topic_folder_id": o_topic_id,
+            "topic_name": o_topic_name, "wrong_count": 1, "last_points": 1.0, "resolved": False,
+            "created_at": now, "updated_at": now,
+        })
+    return {"ok": True}
+
+@api_router.get("/")
 async def root():
     return {"message": "EDN Prep API"}
 
