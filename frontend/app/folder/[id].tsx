@@ -82,6 +82,11 @@ export default function FolderDetail() {
 
   const folderColor = folderQ.data?.color || DEFAULT_FOLDER_COLOR;
   const isTopLevel = (folderQ.data?.breadcrumb?.length ?? 0) <= 1;
+  const combineQuizzes = useMutation({
+    mutationFn: () => apiFetch<Quiz>("/quizzes/combine", { body: { folder_id: id } }),
+    onSuccess: (q) => router.push(`/quiz/play?quizId=${q.id}`),
+    onError: (e: any) => toast.show(e.message || "Aucun QCM à regrouper", "error"),
+  });
   const derivedSubColor = lighten(folderColor);
 
   const invalidate = () => {
@@ -457,6 +462,20 @@ export default function FolderDetail() {
           )}
         </View>
 
+        {isTopLevel ? (
+          <Pressable
+            style={styles.chatBtn}
+            onPress={() => combineQuizzes.mutate()}
+            disabled={combineQuizzes.isPending}
+            testID="review-all-quizzes"
+          >
+            <Ionicons name="layers-outline" size={20} color={colors.brandPrimary} />
+            <Text style={styles.chatText}>
+              {combineQuizzes.isPending ? "Préparation…" : "Revoir tous les QCM"}
+            </Text>
+          </Pressable>
+        ) : null}
+        
         {/* Méthode des J */}
         <View style={styles.section}>
           <View style={styles.sectionHead}>
