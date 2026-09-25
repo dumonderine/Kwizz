@@ -91,18 +91,23 @@ export default function Accueil() {
           style={({ pressed }) => [styles.reviewCard, pressed && styles.pressed]}
           onPress={() => router.push("/calendar")}
         >
-          <View style={styles.reviewHeader}>
-            <Text style={styles.reviewDate}>{longDate(today)}</Text>
-            <Ionicons name="chevron-forward" size={20} color={colors.muted} />
-          </View>
+          <Text style={styles.reviewDate}>{longDate(today)}</Text>
 
           {todayEventsQ.isLoading ? (
             <ActivityIndicator color={colors.brandPrimary} />
           ) : todayEventsQ.data && todayEventsQ.data.length > 0 ? (
-            <View style={styles.reviewTags}>
+            <View style={{ gap: 12 }}>
               {todayEventsQ.data.map((e) => (
-                <View key={e.id} style={[styles.reviewTag, { backgroundColor: e.color }]}>
-                  <Text style={styles.reviewTagText}>{e.label} {e.folder_name}</Text>
+                <View key={e.id} style={styles.reviewRow}>
+                  <View style={[styles.reviewBadge, { backgroundColor: e.color }]}>
+                    <Text style={styles.reviewBadgeText}>{e.label}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.reviewFolder} numberOfLines={1}>{e.folder_name}</Text>
+                    <Text style={styles.reviewTopic} numberOfLines={1}>
+                      {e.topic_name} · {e.offset === 0 ? "QCM généré ce jour" : "Revoir le cours"}
+                    </Text>
+                  </View>
                 </View>
               ))}
             </View>
@@ -135,16 +140,18 @@ const useStyles = makeStyles((colors) => ({
   anchorSub: { fontSize: 13, fontFamily: fonts.regular, color: colors.muted, marginTop: 2 },
   reviewCard: {
     backgroundColor: colors.surface,
-    borderRadius: 16,
-    padding: 16,
+    borderRadius: 18,
+    padding: 24,
     borderWidth: 1,
     borderColor: colors.border,
-    gap: 10,
+    gap: 16,
+    minHeight: 200,
   },
-  reviewHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  reviewDate: { fontSize: 17, fontFamily: fonts.bold, color: colors.onSurface, textTransform: "capitalize" },
-  reviewTags: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  reviewTag: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
-  reviewTagText: { fontSize: 13, fontFamily: fonts.extrabold, color: "#ffffff" },
-  reviewEmpty: { fontSize: 14, fontFamily: fonts.regular, color: colors.muted },
+  reviewDate: { fontSize: 20, fontFamily: fonts.extrabold, color: colors.onSurface, textAlign: "center", textTransform: "capitalize" },
+  reviewRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  reviewBadge: { minWidth: 40, height: 32, borderRadius: 8, alignItems: "center", justifyContent: "center", paddingHorizontal: 8 },
+  reviewBadgeText: { fontSize: 13, fontFamily: fonts.extrabold, color: "#ffffff" },
+  reviewFolder: { fontSize: 15, fontFamily: fonts.semibold, color: colors.onSurface },
+  reviewTopic: { fontSize: 12, fontFamily: fonts.regular, color: colors.muted, marginTop: 1 },
+  reviewEmpty: { fontSize: 14, fontFamily: fonts.regular, color: colors.muted, textAlign: "center" },
 }));
