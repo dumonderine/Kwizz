@@ -164,6 +164,7 @@ class TextSourceIn(BaseModel):
 class GenerateIn(BaseModel):
     folder_id: str
     num_questions: int = 10
+    source_ids: Optional[List[str]] = None
 
 
 class ReviewQuizIn(BaseModel):
@@ -746,13 +747,27 @@ def build_system(field: Optional[str]) -> str:
     )
 
 
-def build_prompt(num: int, text_blob: str, field: Optional[str] = None, part: Optional[tuple] = None) -> str:
+def build_prompt(
+    num: int,
+    text_blob: str,
+    field: Optional[str] = None,
+    part: Optional[tuple] = None,
+    avoid: Optional[List[str]] = None,
+) -> str:
     style = "de type EDN/PASS de difficulté élevée" if is_medecine(field) else "d'examen universitaire exigeants"
     focus = ""
     if part and part[1] > 1:
         focus = (
             f"- Ce lot est la partie {part[0]}/{part[1]} : découpe mentalement le contenu en {part[1]} parties "
             f"égales et concentre-toi UNIQUEMENT sur la partie {part[0]} pour éviter les doublons avec les autres lots.\n"
+        )
+    avoid_block = ""
+    if avoid:
+        joined = "\n".join(f"- {a[:220]}" for a in avoid[:150])
+        avoid_block = (
+            "\nQuestions DÉJÀ POSÉES précédemment sur ce(s) même(s) document(s) : NE LES REPOSE PAS à "
+            "l'identique ni sous une forme trop proche. Choisis d'autres notions, d'autres détails ou "
+            "d'autres angles du cours pour varier au maximum par rapport à cette liste :\n" + joined + "\n"
         )
     return (
         f"À partir des documents et du texte de cours fournis, génère exactement {num} QCM "
@@ -771,7 +786,7 @@ def build_prompt(num: int, text_blob: str, field: Optional[str] = None, part: Op
         "bonnes réponses.\n"
         "- Les questions doivent couvrir le contenu fourni.\n"
         "- L'explication doit être précise, concise (2-4 phrases) et basée sur le cours fourni.\n"
-        + focus +
+        + focus + avoid_block +
         "\nRéponds STRICTEMENT avec un tableau JSON valide, sans markdown, sans texte avant ou après, de cet exact format:\n"
         '[{"q":"énoncé","options":{"A":"...","B":"...","C":"...","D":"...","E":"..."},'
         '"correct":["A","C"],"explanation":"..."}]\n\n'
@@ -866,6 +881,36 @@ async def _generate_batch(system: str, prompt: str, file_contents: List, max_tok
 
 
 BATCH_SIZE = 10
+AVOID_LIST_MAX_QUESTIONS = 150
+AVOID_LIST_MAX_CHARS = 8000
+
+
+async def _gather_avoid_questions(owner_id: str, source_ids: List[str]) -> List[str]:
+    """Questions already generated from the same source(s), so a re-generation can steer clear of them."""
+    if not source_ids:
+        return []
+    past = await db.quizzes.find(
+        {
+            "owner_id": owner_id,
+            "kind": {"$in": ["generated", "annale"]},
+            "deleted_at": None,
+            "source_ids": {"$in": source_ids},
+        }
+    ).sort("created_at", -1).to_list(100)
+    avoid: List[str] = []
+    seen: set = set()
+    char_budget = AVOID_LIST_MAX_CHARS
+    for qz_past in past:
+        for q in qz_past.get("questions", []):
+            txt = (q.get("q") or "").strip()
+            if not txt or txt in seen:
+                continue
+            seen.add(txt)
+            avoid.append(txt)
+            char_budget -= len(txt)
+            if len(avoid) >= AVOID_LIST_MAX_QUESTIONS or char_budget <= 0:
+                return avoid
+    return avoid
 
 
 async def run_generation_job(job_id: str):
@@ -877,11 +922,18 @@ async def run_generation_job(job_id: str):
         user = await db.users.find_one({"id": job["owner_id"]})
         root = await db.folders.find_one({"id": job["folder_id"], "deleted_at": None})
         folder_ids = await gather_folder_ids(job["folder_id"], job["owner_id"])
-        sources = await db.sources.find(
-            {"folder_id": {"$in": folder_ids}, "owner_id": job["owner_id"], "deleted_at": None}
-        ).to_list(200)
+        sources_query: Dict[str, Any] = {
+            "folder_id": {"$in": folder_ids}, "owner_id": job["owner_id"], "deleted_at": None
+        }
+        wanted_source_ids = job.get("source_ids")
+        if wanted_source_ids:
+            sources_query["id"] = {"$in": wanted_source_ids}
+        sources = await db.sources.find(sources_query).to_list(200)
+        used_source_ids = [s["id"] for s in sources]
         text_parts, file_contents, tmp_files = await _load_source_context(sources)
         await db.generation_jobs.update_one({"id": job_id}, {"$set": {"status": "running", "step": "Lecture des cours terminée"}})
+
+        avoid_questions = await _gather_avoid_questions(job["owner_id"], used_source_ids)
 
         field = user.get("study_field")
         num = job["num_questions"]
@@ -891,7 +943,11 @@ async def run_generation_job(job_id: str):
         system = build_system(field)
 
         tasks = [
-            _generate_batch(system, build_prompt(sizes[i], blob, field, (i + 1, n_batches)), file_contents)
+            _generate_batch(
+                system,
+                build_prompt(sizes[i], blob, field, (i + 1, n_batches), avoid=avoid_questions),
+                file_contents,
+            )
             for i in range(n_batches)
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -927,6 +983,7 @@ async def run_generation_job(job_id: str):
             "folder_id": job["folder_id"],
             "title": f"QCM · {root['name']}",
             "kind": "generated",
+            "source_ids": used_source_ids,
             "questions": questions[:num],
             "created_at": datetime.now(timezone.utc).isoformat(),
             "deleted_at": None,
@@ -967,11 +1024,21 @@ async def generate_quiz(data: GenerateIn, user: dict = Depends(current_user)):
     if not has_source:
         raise HTTPException(status_code=400, detail="Ajoutez au moins une source (cours ou annales) dans ce dossier.")
 
+    source_ids = None
+    if data.source_ids:
+        valid = await db.sources.find(
+            {"id": {"$in": data.source_ids}, "folder_id": {"$in": folder_ids}, "owner_id": user["id"], "deleted_at": None}
+        ).to_list(200)
+        if not valid:
+            raise HTTPException(status_code=400, detail="Sources sélectionnées introuvables.")
+        source_ids = [s["id"] for s in valid]
+
     job = {
         "id": str(uuid.uuid4()),
         "owner_id": user["id"],
         "folder_id": data.folder_id,
         "num_questions": max(3, min(data.num_questions, MAX_QUESTIONS)),
+        "source_ids": source_ids,
         "status": "pending",
         "step": "Lecture des cours…",
         "quiz_id": None,
@@ -1041,6 +1108,80 @@ async def review_quiz(data: ReviewQuizIn, user: dict = Depends(current_user)):
     return clean(quiz)
 
 
+# ---------------------------------------------------------------------------
+# Question stats (used for weighted anchor selection)
+# ---------------------------------------------------------------------------
+async def update_question_stats(user_id: str, question: dict, pts: float):
+    """Track per-question history (times seen, consecutive successes, last seen) for spaced
+    repetition in the ancrages. Keyed by the question text, like review_items already does."""
+    key = (question.get("q") or "").strip()
+    if not key:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    existing = await db.question_stats.find_one({"owner_id": user_id, "question_key": key})
+    if existing:
+        new_streak = existing.get("correct_streak", 0) + 1 if pts >= 1.0 else 0
+        await db.question_stats.update_one(
+            {"id": existing["id"]},
+            {"$set": {"correct_streak": new_streak, "last_seen_at": now}, "$inc": {"times_seen": 1}},
+        )
+    else:
+        await db.question_stats.insert_one(
+            {
+                "id": str(uuid.uuid4()),
+                "owner_id": user_id,
+                "question_key": key,
+                "times_seen": 1,
+                "correct_streak": 1 if pts >= 1.0 else 0,
+                "last_seen_at": now,
+                "created_at": now,
+            }
+        )
+
+
+ANCHOR_MAX_INTERVAL_DAYS = 21
+
+
+async def weighted_anchor_sample(user_id: str, pool: List[dict], size: int) -> List[dict]:
+    """Pick questions for the daily ancrage, favouring ones never seen, recently failed, or
+    'due' again given how many times they were answered correctly in a row (spaced repetition).
+    Nothing is ever fully excluded - a well-known question keeps a small chance of appearing."""
+    stats = await db.question_stats.find({"owner_id": user_id}).to_list(5000)
+    stats_by_key = {s["question_key"]: s for s in stats}
+    now = datetime.now(timezone.utc)
+
+    def weight_for(q: dict) -> float:
+        s = stats_by_key.get((q.get("q") or "").strip())
+        if not s:
+            return 5.0  # never seen: top priority
+        streak = s.get("correct_streak", 0)
+        if streak <= 0:
+            return 4.0  # last attempt wrong (or never succeeded): high priority
+        interval_days = min(2 ** streak, ANCHOR_MAX_INTERVAL_DAYS)
+        last_seen = s.get("last_seen_at")
+        try:
+            days_since = (now - datetime.fromisoformat(last_seen)).total_seconds() / 86400 if last_seen else 999
+        except Exception:
+            days_since = 999
+        overdue = days_since / interval_days
+        return max(0.15, min(overdue, 5.0))
+
+    remaining = [(q, weight_for(q)) for q in pool]
+    chosen: List[dict] = []
+    k = min(size, len(remaining))
+    for _ in range(k):
+        total = sum(w for _, w in remaining)
+        r = random.uniform(0, total)
+        acc = 0.0
+        for i, (q, w) in enumerate(remaining):
+            acc += w
+            if acc >= r:
+                chosen.append(q)
+                remaining.pop(i)
+                break
+    return chosen
+
+
 @api_router.get("/anchor/status")
 async def anchor_status(user: dict = Depends(current_user)):
     quizzes = await db.quizzes.find(
@@ -1085,7 +1226,7 @@ async def anchor_daily(user: dict = Depends(current_user)):
         raise HTTPException(status_code=400, detail="Générez d'abord des QCM dans vos dossiers.")
 
     size = user.get("anchor_size", DEFAULT_ANCHOR_SIZE)
-    sample = random.sample(pool, min(size, len(pool)))
+    sample = await weighted_anchor_sample(user["id"], pool, size)
     questions = [dict(q, id=str(uuid.uuid4())) for q in sample]
 
     quiz = {
@@ -1206,6 +1347,7 @@ async def answer_question(data: AnswerIn, user: dict = Depends(current_user)):
         )
     else:
         await add_to_review(user["id"], question, qz.get("folder_id"), pts)
+    await update_question_stats(user["id"], question, pts)
     return {"points": pts, "discordance": disc, "correct": question["correct"]}
 
 
@@ -1245,6 +1387,7 @@ async def submit_quiz(data: SubmitIn, user: dict = Depends(current_user)):
         )
         if pts < 1.0:
             review_added += 1
+        await update_question_stats(user["id"], question, pts)
 
     n = len(qz.get("questions", [])) or 1
     grade_on_20 = round((total / n) * 20, 2)
