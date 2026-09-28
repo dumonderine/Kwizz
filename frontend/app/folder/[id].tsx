@@ -74,6 +74,7 @@ export default function FolderDetail() {
   const [uploading, setUploading] = useState(false);
   const [showAnnale, setShowAnnale] = useState(false);
   const [viewText, setViewText] = useState<{ name: string; text: string } | null>(null);
+  const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(new Set());
 
   const folderQ = useQuery({ queryKey: ["folder", id], queryFn: () => apiFetch<Folder>(`/folders/${id}`) });
   const subsQ = useQuery({ queryKey: ["folders", id], queryFn: () => apiFetch<SubFolder[]>(`/folders?parent_id=${id}`) });
@@ -89,6 +90,22 @@ export default function FolderDetail() {
     onError: (e: any) => toast.show(e.message || "Aucun QCM à regrouper", "error"),
   });
   const derivedSubColor = lighten(folderColor);
+
+  // Toutes les sources sont sélectionnées par défaut (comportement identique à avant : tout est
+  // utilisé) ; on resynchronise si des sources sont ajoutées ou supprimées.
+  useEffect(() => {
+    if (srcQ.data) setSelectedSourceIds(new Set(srcQ.data.map((s) => s.id)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [srcQ.data?.length, id]);
+
+  const toggleSource = (sid: string) => {
+    setSelectedSourceIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(sid)) next.delete(sid);
+      else next.add(sid);
+      return next;
+    });
+  };
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["folders", id] });
@@ -148,8 +165,22 @@ export default function FolderDetail() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["quizzes", id] }),
   });
 
+  const canGenerate = selectedSourceIds.size > 0;
+
   const generate = useMutation({
-    mutationFn: (num: number) => apiFetch<GenJob>("/quizzes/generate", { body: { folder_id: id, num_questions: num } }),
+    mutationFn: (num: number) =>
+      apiFetch<GenJob>("/quizzes/generate", {
+        body: {
+          folder_id: id,
+          num_questions: num,
+          // On n'envoie une liste que si c'est une sélection PARTIELLE des sources : sinon on
+          // garde le comportement historique (toutes les sources du dossier et sous-dossiers).
+          source_ids:
+            srcQ.data && selectedSourceIds.size > 0 && selectedSourceIds.size < srcQ.data.length
+              ? Array.from(selectedSourceIds)
+              : undefined,
+        },
+      }),
     onSuccess: (job) => {
       setJobId(job.id);
       setCustomCount("");
@@ -160,6 +191,14 @@ export default function FolderDetail() {
       toast.show(e.message, "error");
     },
   });
+
+  const startGenerate = (num: number) => {
+    if (!canGenerate) {
+      toast.show("Sélectionnez au moins une source.", "error");
+      return;
+    }
+    generate.mutate(num);
+  };
 
   // Poll the background job while it runs (also survives navigating away: see jobsQ).
   const jobQ = useQuery({
@@ -217,7 +256,7 @@ export default function FolderDetail() {
       toast.show("Minimum 3 questions", "error");
       return;
     }
-    generate.mutate(Math.min(n, MAX_QUESTIONS));
+    startGenerate(Math.min(n, MAX_QUESTIONS));
   };
 
   const pickPdf = async () => {
@@ -395,6 +434,11 @@ export default function FolderDetail() {
           ) : null}
           {srcQ.data && srcQ.data.length > 0 ? (
             <View style={{ gap: 10 }}>
+              {srcQ.data.length > 1 ? (
+                <Text style={styles.hint}>
+                  Décochez les sources à ne pas utiliser pour le prochain QCM généré.
+                </Text>
+              ) : null}
               {srcQ.data.map((s) => (
                 <Pressable
                   key={s.id}
@@ -402,6 +446,17 @@ export default function FolderDetail() {
                   style={({ pressed }) => [styles.row, pressed && styles.pressed]}
                   onPress={() => openSource(s)}
                 >
+                  <Pressable
+                    onPress={() => toggleSource(s.id)}
+                    hitSlop={8}
+                    testID={`source-check-${s.id}`}
+                    style={[
+                      styles.checkbox,
+                      selectedSourceIds.has(s.id) && { backgroundColor: folderColor, borderColor: folderColor },
+                    ]}
+                  >
+                    {selectedSourceIds.has(s.id) ? <Ionicons name="checkmark" size={14} color="#fff" /> : null}
+                  </Pressable>
                   <View style={[styles.iconWell, { backgroundColor: colors.surfaceTertiary }]}>
                     <Ionicons name={(SRC_ICON[s.kind] || "document") as any} size={20} color={colors.onSurfaceSecondary} />
                   </View>
@@ -707,12 +762,17 @@ export default function FolderDetail() {
             ) : (
               <>
                 <Text style={styles.genTitle}>Combien de questions ?</Text>
+                {srcQ.data && srcQ.data.length > 1 ? (
+                  <Text style={[styles.hint, { textAlign: "center", marginBottom: 4 }]}>
+                    {selectedSourceIds.size} source(s) sélectionnée(s) sur {srcQ.data.length}
+                  </Text>
+                ) : null}
                 <View style={styles.countRow}>
                   {[5, 10, 15, 20, 30].map((n) => (
                     <Pressable
                       key={n}
-                      style={styles.countChip}
-                      onPress={() => generate.mutate(n)}
+                      style={[styles.countChip, !canGenerate && { opacity: 0.4 }]}
+                      onPress={() => startGenerate(n)}
                       testID={`gen-count-${n}`}
                     >
                       <Text style={styles.countText}>{n}</Text>
@@ -776,6 +836,15 @@ const useStyles = makeStyles((colors) => ({
   pressed: { opacity: 0.7 },
   iconWell: { width: 40, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   rowTitle: { fontSize: 15, fontFamily: fonts.semibold, color: colors.onSurface },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: "#cbd5e1",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   subfolderRow: {
     flexDirection: "row",
     alignItems: "center",
