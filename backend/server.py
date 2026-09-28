@@ -759,6 +759,13 @@ def build_prompt(num: int, text_blob: str, field: Optional[str] = None, part: Op
         "- Sur l'ensemble des QCM générés, environ 1 question sur 10 doit avoir une seule bonne "
         "réponse, environ 1 question sur 10 doit avoir les cinq propositions vraies (A à E), et le "
         "reste (la grande majorité) doit avoir entre 2 et 4 bonnes réponses.\n"
+        "- IMPORTANT : l'énoncé de la question ne doit JAMAIS révéler si une seule ou plusieurs "
+        "réponses sont attendues. Interdiction d'écrire des formulations comme \"quelle est la seule "
+        "proposition...\", \"quelle proposition...\" (singulier) ou \"quelles sont les propositions...\" "
+        "(pluriel qui trahit le nombre). Utilise systématiquement une formulation neutre, par exemple : "
+        "\"Parmi les propositions suivantes, laquelle ou lesquelles est/sont exacte(s) ?\" ou "
+        "\"Quelle(s) proposition(s) est/sont vraie(s) ?\", qui ne donne aucun indice sur le nombre de "
+        "bonnes réponses.\n"
         "- Les questions doivent couvrir le contenu fourni.\n"
         "- L'explication doit être précise, concise (2-4 phrases) et basée sur le cours fourni.\n"
         + focus +
