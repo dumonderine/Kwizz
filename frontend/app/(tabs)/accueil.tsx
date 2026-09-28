@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@react-native-vector-icons/ionicons";
@@ -32,6 +32,7 @@ export default function Accueil() {
   const { user } = useAuth();
 
   const today = useMemo(() => new Date(), []);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
 
   const anchorEnabled = user?.anchor_enabled !== false;
   const anchorSize = user?.anchor_size ?? 40;
@@ -47,6 +48,18 @@ export default function Accueil() {
     queryKey: ["j-events-today", ymd(today)],
     queryFn: () => apiFetch<JEvent[]>(`/j/events?start=${ymd(today)}&end=${ymd(today)}`),
   });
+
+  const toggleChecked = (eventId: string) => {
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(eventId)) next.delete(eventId);
+      else next.add(eventId);
+      return next;
+    });
+  };
+
+  const todayEvents = todayEventsQ.data ?? [];
+  const allChecked = todayEvents.length > 0 && todayEvents.every((e) => checkedIds.has(e.id));
 
   const AnchorCard = anchorEnabled ? (
     <Pressable
@@ -97,19 +110,39 @@ export default function Accueil() {
             <ActivityIndicator color={colors.brandPrimary} />
           ) : todayEventsQ.data && todayEventsQ.data.length > 0 ? (
             <View style={{ gap: 12 }}>
-              {todayEventsQ.data.map((e) => (
-                <View key={e.id} style={styles.reviewRow}>
-                  <View style={[styles.reviewBadge, { backgroundColor: e.color }]}>
-                    <Text style={styles.reviewBadgeText}>{e.label}</Text>
+              {todayEventsQ.data.map((e) => {
+                const checked = checkedIds.has(e.id);
+                return (
+                  <View key={e.id} style={styles.reviewRow}>
+                    <View style={[styles.reviewBadge, { backgroundColor: e.color }]}>
+                      <Text style={styles.reviewBadgeText}>{e.label}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.reviewFolder} numberOfLines={1}>{e.folder_name}</Text>
+                      <Text style={styles.reviewTopic} numberOfLines={1}>
+                        {e.topic_name} · {e.offset === 0 ? "QCM généré ce jour" : "Revoir le cours"}
+                      </Text>
+                    </View>
+                    <Pressable
+                      onPress={() => toggleChecked(e.id)}
+                      hitSlop={10}
+                      testID={`j-check-${e.id}`}
+                      style={[
+                        styles.jCheckbox,
+                        { borderColor: e.color },
+                        checked && { backgroundColor: e.color },
+                      ]}
+                    >
+                      {checked ? <Ionicons name="checkmark" size={16} color="#fff" /> : null}
+                    </Pressable>
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.reviewFolder} numberOfLines={1}>{e.folder_name}</Text>
-                    <Text style={styles.reviewTopic} numberOfLines={1}>
-                      {e.topic_name} · {e.offset === 0 ? "QCM généré ce jour" : "Revoir le cours"}
-                    </Text>
-                  </View>
+                );
+              })}
+              {allChecked ? (
+                <View style={styles.celebrate}>
+                  <Text style={styles.celebrateText}>🎉 Bravo, tu as fini tes J du jour !</Text>
                 </View>
-              ))}
+              ) : null}
             </View>
           ) : (
             <Text style={styles.reviewEmpty}>Aucune révision programmée aujourd'hui</Text>
@@ -154,4 +187,20 @@ const useStyles = makeStyles((colors) => ({
   reviewFolder: { fontSize: 15, fontFamily: fonts.semibold, color: colors.onSurface },
   reviewTopic: { fontSize: 12, fontFamily: fonts.regular, color: colors.muted, marginTop: 1 },
   reviewEmpty: { fontSize: 14, fontFamily: fonts.regular, color: colors.muted, textAlign: "center" },
+  jCheckbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  celebrate: {
+    marginTop: 4,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+    alignItems: "center",
+  },
+  celebrateText: { fontSize: 14, fontFamily: fonts.bold, color: colors.brandPrimary, textAlign: "center" },
 }));
