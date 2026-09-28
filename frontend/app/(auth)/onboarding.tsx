@@ -12,6 +12,10 @@ import { fonts, makeStyles, useTheme } from "@/src/theme";
 
 const FIELDS = [
   { label: "Médecine (PASS/LAS/EDN)", value: "Médecine", icon: "medkit" },
+  { label: "Dentaire", value: "Dentaire", icon: "medical" },
+  { label: "Maïeutique", value: "Maïeutique", icon: "body" },
+  { label: "Pharmacie", value: "Pharmacie", icon: "flask" },
+  { label: "IFSI (Infirmier)", value: "IFSI", icon: "heart" },
   { label: "Droit", value: "Droit", icon: "briefcase" },
   { label: "Licence", value: "Licence", icon: "school" },
   { label: "BTS", value: "BTS", icon: "construct" },
