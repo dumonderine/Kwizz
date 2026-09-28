@@ -91,12 +91,12 @@ export default function FolderDetail() {
   });
   const derivedSubColor = lighten(folderColor);
 
-  // Toutes les sources sont sélectionnées par défaut (comportement identique à avant : tout est
-  // utilisé) ; on resynchronise si des sources sont ajoutées ou supprimées.
+  // Cases à cocher : elles ne vivent que dans la popup "Générer un QCM". À chaque ouverture de
+  // la popup, tout est recoché par défaut (comportement identique à avant si on ne touche à rien).
   useEffect(() => {
-    if (srcQ.data) setSelectedSourceIds(new Set(srcQ.data.map((s) => s.id)));
+    if (showGen && srcQ.data) setSelectedSourceIds(new Set(srcQ.data.map((s) => s.id)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [srcQ.data?.length, id]);
+  }, [showGen]);
 
   const toggleSource = (sid: string) => {
     setSelectedSourceIds((prev) => {
@@ -434,11 +434,6 @@ export default function FolderDetail() {
           ) : null}
           {srcQ.data && srcQ.data.length > 0 ? (
             <View style={{ gap: 10 }}>
-              {srcQ.data.length > 1 ? (
-                <Text style={styles.hint}>
-                  Décochez les sources à ne pas utiliser pour le prochain QCM généré.
-                </Text>
-              ) : null}
               {srcQ.data.map((s) => (
                 <Pressable
                   key={s.id}
@@ -446,17 +441,6 @@ export default function FolderDetail() {
                   style={({ pressed }) => [styles.row, pressed && styles.pressed]}
                   onPress={() => openSource(s)}
                 >
-                  <Pressable
-                    onPress={() => toggleSource(s.id)}
-                    hitSlop={8}
-                    testID={`source-check-${s.id}`}
-                    style={[
-                      styles.checkbox,
-                      selectedSourceIds.has(s.id) && { backgroundColor: folderColor, borderColor: folderColor },
-                    ]}
-                  >
-                    {selectedSourceIds.has(s.id) ? <Ionicons name="checkmark" size={14} color="#fff" /> : null}
-                  </Pressable>
                   <View style={[styles.iconWell, { backgroundColor: colors.surfaceTertiary }]}>
                     <Ionicons name={(SRC_ICON[s.kind] || "document") as any} size={20} color={colors.onSurfaceSecondary} />
                   </View>
@@ -761,12 +745,40 @@ export default function FolderDetail() {
               </View>
             ) : (
               <>
-                <Text style={styles.genTitle}>Combien de questions ?</Text>
                 {srcQ.data && srcQ.data.length > 1 ? (
-                  <Text style={[styles.hint, { textAlign: "center", marginBottom: 4 }]}>
-                    {selectedSourceIds.size} source(s) sélectionnée(s) sur {srcQ.data.length}
-                  </Text>
+                  <>
+                    <Text style={styles.genSubTitle}>Sources à utiliser</Text>
+                    <ScrollView style={srcQ.data.length > 4 ? { maxHeight: 180 } : undefined}>
+                      <View style={{ gap: 8 }}>
+                        {srcQ.data.map((s) => (
+                          <Pressable
+                            key={s.id}
+                            onPress={() => toggleSource(s.id)}
+                            style={styles.srcPickRow}
+                            testID={`gen-source-${s.id}`}
+                          >
+                            <View
+                              style={[
+                                styles.checkbox,
+                                selectedSourceIds.has(s.id) && {
+                                  backgroundColor: colors.brandPrimary,
+                                  borderColor: colors.brandPrimary,
+                                },
+                              ]}
+                            >
+                              {selectedSourceIds.has(s.id) ? <Ionicons name="checkmark" size={14} color="#fff" /> : null}
+                            </View>
+                            <Text style={styles.srcPickText} numberOfLines={1}>
+                              {s.name}
+                            </Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    </ScrollView>
+                    <View style={{ height: 16 }} />
+                  </>
                 ) : null}
+                <Text style={styles.genTitle}>Combien de questions ?</Text>
                 <View style={styles.countRow}>
                   {[5, 10, 15, 20, 30].map((n) => (
                     <Pressable
@@ -911,6 +923,9 @@ const useStyles = makeStyles((colors) => ({
   centerModal: { flex: 1, backgroundColor: "rgba(15,23,42,0.45)", alignItems: "center", justifyContent: "center", padding: 24 },
   genCard: { backgroundColor: colors.surface, borderRadius: 20, padding: 24, width: "100%", maxWidth: 420 },
   genTitle: { fontSize: 18, fontFamily: fonts.extrabold, color: colors.onSurface, textAlign: "center", marginBottom: 16 },
+  genSubTitle: { fontSize: 14, fontFamily: fonts.bold, color: colors.onSurface, marginBottom: 10 },
+  srcPickRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 4 },
+  srcPickText: { flex: 1, fontSize: 14, fontFamily: fonts.regular, color: colors.onSurface },
   countRow: { flexDirection: "row", justifyContent: "center", flexWrap: "wrap", gap: 12 },
   countChip: {
     width: 56,
