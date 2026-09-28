@@ -722,7 +722,10 @@ def is_medecine(field: Optional[str]) -> bool:
     if not field:
         return False
     f = field.lower()
-    return "méd" in f or "med" in f or "pass" in f or "las" in f or "edn" in f
+    return (
+        "méd" in f or "med" in f or "pass" in f or "las" in f or "edn" in f
+        or "dentaire" in f or "maïeut" in f or "maieut" in f or "pharma" in f or "ifsi" in f
+    )
 
 
 def build_system(field: Optional[str]) -> str:
