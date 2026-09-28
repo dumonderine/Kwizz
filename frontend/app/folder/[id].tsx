@@ -315,6 +315,43 @@ export default function FolderDetail() {
 
   const bottomBar = 88 + insets.bottom;
 
+  const subfoldersSection = (
+    <View style={styles.section}>
+      <View style={styles.sectionHead}>
+        <Text style={styles.sectionTitle}>Sous-dossiers</Text>
+        <Pressable onPress={() => setShowSub(true)} testID="add-subfolder" hitSlop={8}>
+          <Ionicons name="add-circle" size={26} color={folderColor} />
+        </Pressable>
+      </View>
+      {subsQ.data && subsQ.data.length > 0 ? (
+        <View style={{ gap: 12 }}>
+          {subsQ.data.map((s) => {
+            const c = s.color || derivedSubColor;
+            return (
+              <Pressable
+                key={s.id}
+                testID={`subfolder-${s.id}`}
+                style={({ pressed }) => [styles.subfolderRow, { borderLeftColor: c }, pressed && styles.pressed]}
+                onPress={() => router.push(`/folder/${s.id}`)}
+              >
+                <View style={[styles.subfolderIconWell, { backgroundColor: tintBg(c) }]}>
+                  <Ionicons name="folder" size={26} color={c} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.subfolderTitle}>{s.name}</Text>
+                  <Text style={styles.rowMeta}>{s.source_count} source(s)</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color={colors.muted} />
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : (
+        <Text style={styles.hint}>Aucun sous-dossier. Ajoutez un chapitre.</Text>
+      )}
+    </View>
+  );
+
   return (
     <View style={styles.container}>
       {/* Sticky header */}
@@ -334,41 +371,7 @@ export default function FolderDetail() {
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: bottomBar + 24, gap: 24 }}>
-        {/* Sous-dossiers */}
-        <View style={styles.section}>
-          <View style={styles.sectionHead}>
-            <Text style={styles.sectionTitle}>Sous-dossiers</Text>
-            <Pressable onPress={() => setShowSub(true)} testID="add-subfolder" hitSlop={8}>
-              <Ionicons name="add-circle" size={26} color={folderColor} />
-            </Pressable>
-          </View>
-          {subsQ.data && subsQ.data.length > 0 ? (
-            <View style={{ gap: 10 }}>
-              {subsQ.data.map((s) => {
-                const c = s.color || derivedSubColor;
-                return (
-                  <Pressable
-                    key={s.id}
-                    testID={`subfolder-${s.id}`}
-                    style={({ pressed }) => [styles.row, { borderLeftColor: c }, pressed && styles.pressed]}
-                    onPress={() => router.push(`/folder/${s.id}`)}
-                  >
-                    <View style={[styles.iconWell, { backgroundColor: tintBg(c) }]}>
-                      <Ionicons name="folder" size={20} color={c} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.rowTitle}>{s.name}</Text>
-                      <Text style={styles.rowMeta}>{s.source_count} source(s)</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={18} color={colors.muted} />
-                  </Pressable>
-                );
-              })}
-            </View>
-          ) : (
-            <Text style={styles.hint}>Aucun sous-dossier. Ajoutez un chapitre.</Text>
-          )}
-        </View>
+        {isTopLevel ? subfoldersSection : null}
 
         {/* Sources */}
         <View style={styles.section}>
@@ -420,67 +423,68 @@ export default function FolderDetail() {
           )}
         </View>
 
-        {/* Quizzes */}
-        <View style={styles.section}>
-          <View style={styles.sectionHead}>
-            <Text style={styles.sectionTitle}>QCM générés</Text>
-          </View>
-          {jobsQ.data && jobsQ.data.length > 0 ? (
-            <View style={{ gap: 10 }}>
-              {jobsQ.data.map((j) => (
-                <View key={j.id} style={[styles.row, { borderLeftColor: j.status === "error" ? colors.error : folderColor }]} testID={`gen-job-${j.id}`}>
-                  <View style={[styles.iconWell, { backgroundColor: j.status === "error" ? colors.errorSurface : tintBg(folderColor) }]}>
+        {!isTopLevel ? (
+          <View style={styles.section}>
+            <View style={styles.sectionHead}>
+              <Text style={styles.sectionTitle}>QCM générés</Text>
+            </View>
+            {jobsQ.data && jobsQ.data.length > 0 ? (
+              <View style={{ gap: 10 }}>
+                {jobsQ.data.map((j) => (
+                  <View key={j.id} style={[styles.row, { borderLeftColor: j.status === "error" ? colors.error : folderColor }]} testID={`gen-job-${j.id}`}>
+                    <View style={[styles.iconWell, { backgroundColor: j.status === "error" ? colors.errorSurface : tintBg(folderColor) }]}>
+                      {j.status === "error" ? (
+                        <Ionicons name="alert-circle" size={22} color={colors.error} />
+                      ) : (
+                        <ActivityIndicator color={folderColor} />
+                      )}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.rowTitle}>
+                        {j.status === "error" ? "Génération échouée" : `Génération de ${j.num_questions} QCM…`}
+                      </Text>
+                      <Text style={styles.rowMeta} numberOfLines={2}>
+                        {j.status === "error" ? j.error || "Réessayez" : j.step || "L'IA rédige vos questions"}
+                      </Text>
+                    </View>
                     {j.status === "error" ? (
-                      <Ionicons name="alert-circle" size={22} color={colors.error} />
-                    ) : (
-                      <ActivityIndicator color={folderColor} />
-                    )}
+                      <Pressable onPress={() => dismissJob.mutate(j.id)} hitSlop={8} testID={`dismiss-job-${j.id}`}>
+                        <Ionicons name="close-circle-outline" size={22} color={colors.muted} />
+                      </Pressable>
+                    ) : null}
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.rowTitle}>
-                      {j.status === "error" ? "Génération échouée" : `Génération de ${j.num_questions} QCM…`}
-                    </Text>
-                    <Text style={styles.rowMeta} numberOfLines={2}>
-                      {j.status === "error" ? j.error || "Réessayez" : j.step || "L'IA rédige vos questions"}
-                    </Text>
-                  </View>
-                  {j.status === "error" ? (
-                    <Pressable onPress={() => dismissJob.mutate(j.id)} hitSlop={8} testID={`dismiss-job-${j.id}`}>
-                      <Ionicons name="close-circle-outline" size={22} color={colors.muted} />
+                ))}
+              </View>
+            ) : null}
+            {quizQ.data && quizQ.data.length > 0 ? (
+              <View style={{ gap: 10 }}>
+                {quizQ.data.map((q) => (
+                  <Pressable
+                    key={q.id}
+                    testID={`quiz-${q.id}`}
+                    style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+                    onPress={() => router.push(`/quiz/play?quizId=${q.id}`)}
+                  >
+                    <View style={[styles.iconWell, { backgroundColor: colors.brandTertiary }]}>
+                      <Ionicons name="help-circle" size={22} color={colors.brandPrimary} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.rowTitle} numberOfLines={1}>
+                        {q.title}
+                      </Text>
+                      <Text style={styles.rowMeta}>{q.question_count} questions</Text>
+                    </View>
+                    <Pressable onPress={() => delQuiz.mutate(q.id)} hitSlop={8} testID={`del-quiz-${q.id}`}>
+                      <Ionicons name="trash-outline" size={20} color={colors.error} />
                     </Pressable>
-                  ) : null}
-                </View>
-              ))}
-            </View>
-          ) : null}
-          {quizQ.data && quizQ.data.length > 0 ? (
-            <View style={{ gap: 10 }}>
-              {quizQ.data.map((q) => (
-                <Pressable
-                  key={q.id}
-                  testID={`quiz-${q.id}`}
-                  style={({ pressed }) => [styles.row, pressed && styles.pressed]}
-                  onPress={() => router.push(`/quiz/play?quizId=${q.id}`)}
-                >
-                  <View style={[styles.iconWell, { backgroundColor: colors.brandTertiary }]}>
-                    <Ionicons name="help-circle" size={22} color={colors.brandPrimary} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.rowTitle} numberOfLines={1}>
-                      {q.title}
-                    </Text>
-                    <Text style={styles.rowMeta}>{q.question_count} questions</Text>
-                  </View>
-                  <Pressable onPress={() => delQuiz.mutate(q.id)} hitSlop={8} testID={`del-quiz-${q.id}`}>
-                    <Ionicons name="trash-outline" size={20} color={colors.error} />
                   </Pressable>
-                </Pressable>
-              ))}
-            </View>
-          ) : (
-            <Text style={styles.hint}>Aucun QCM. Générez-en un à partir de vos sources.</Text>
-          )}
-        </View>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.hint}>Aucun QCM. Générez-en un à partir de vos sources.</Text>
+            )}
+          </View>
+        ) : null}
 
         {isTopLevel ? (
           <Pressable
@@ -491,10 +495,12 @@ export default function FolderDetail() {
           >
             <Ionicons name="layers-outline" size={20} color={colors.brandPrimary} />
             <Text style={styles.chatText}>
-              {combineQuizzes.isPending ? "Préparation…" : "Revoir tous les QCM"}
+              {combineQuizzes.isPending ? "Préparation…" : `Revoir tous les QCM de ${folderQ.data?.name || ""}`}
             </Text>
           </Pressable>
         ) : null}
+
+        {!isTopLevel ? subfoldersSection : null}
 
         {/* Méthode des J */}
         <View style={styles.section}>
@@ -770,6 +776,20 @@ const useStyles = makeStyles((colors) => ({
   pressed: { opacity: 0.7 },
   iconWell: { width: 40, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   rowTitle: { fontSize: 15, fontFamily: fonts.semibold, color: colors.onSurface },
+  subfolderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    backgroundColor: colors.surface,
+    borderRadius: 18,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderLeftWidth: 6,
+    borderLeftColor: colors.border,
+  },
+  subfolderIconWell: { width: 56, height: 56, borderRadius: 14, alignItems: "center", justifyContent: "center" },
+  subfolderTitle: { fontSize: 17, fontFamily: fonts.bold, color: colors.onSurface },
   rowMeta: { fontSize: 12, fontFamily: fonts.regular, color: colors.muted, marginTop: 1 },
   hint: { fontSize: 14, fontFamily: fonts.regular, color: colors.muted },
   chatBtn: {
