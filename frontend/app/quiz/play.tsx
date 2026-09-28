@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Platform, Pressable, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@react-native-vector-icons/ionicons";
 
@@ -103,6 +103,8 @@ export default function QuizPlay() {
   const [duration, setDuration] = useState(0);
   const [remaining, setRemaining] = useState(0);
   const [paused, setPaused] = useState(false);
+  const [showCloseMenu, setShowCloseMenu] = useState(false);
+  const [partialView, setPartialView] = useState(false);
   const flagReview = useMutation({
     mutationFn: (questionId: string) =>
       apiFetch("/quizzes/flag-review", { body: { quiz_id: quizId, question_id: questionId } }),
@@ -131,14 +133,41 @@ export default function QuizPlay() {
   }, [quiz?.id]);
 
   useEffect(() => {
-    if (!timerOn || !durationPicked || paused || finished) return;
+    if (!timerOn || !durationPicked || paused || finished || partialView) return;
     const id = setInterval(() => setRemaining((r) => (r > 0 ? r - 1 : 0)), 1000);
     return () => clearInterval(id);
-  }, [timerOn, durationPicked, paused, finished]);
+  }, [timerOn, durationPicked, paused, finished, partialView]);
 
   const current = questions[index];
   const letters = useMemo(() => (current ? Object.keys(current.options) : []), [current]);
   const total = questions.length;
+
+  const partialResult = useMemo(() => {
+    const answeredIds = Object.keys(answers);
+    const byId: Record<string, any> = Object.fromEntries(questions.map((q) => [q.id, q]));
+    const results = answeredIds
+      .map((qid) => {
+        const q = byId[qid];
+        if (!q) return null;
+        const sel = answers[qid];
+        const ql = Object.keys(q.options);
+        const d = discordanceCount(sel, q.correct, ql);
+        return { question_id: qid, selected: sel, correct: q.correct, points: pointsFor(d) };
+      })
+      .filter(Boolean) as { question_id: string; selected: string[]; correct: string[]; points: number }[];
+    const total_points = results.reduce((sum, r) => sum + r.points, 0);
+    const max_points = results.length || 1;
+    const grade_on_20 = Math.round((total_points / max_points) * 20 * 100) / 100;
+    return { total_points, max_points: results.length, grade_on_20, results };
+  }, [answers, questions]);
+
+  const handleClose = () => {
+    if (Object.keys(answers).length === 0 || finished) {
+      router.back();
+    } else {
+      setShowCloseMenu(true);
+    }
+  };
 
   const toggle = (letter: string) => {
     if (answered) return;
@@ -380,6 +409,90 @@ export default function QuizPlay() {
     );
   }
 
+  // ---------- PARTIAL GRADE SCREEN (quit mid-session, keep resume point) ----------
+  if (partialView) {
+    const showGrade = user?.show_grade !== false;
+    const missed = partialResult.results.filter((r) => r.points < 1);
+    const byId: Record<string, Question> = Object.fromEntries(questions.map((q) => [q.id, q]));
+
+    return (
+      <View style={styles.container}>
+        <ScrollView contentContainerStyle={{ padding: 24, paddingTop: insets.top + 24, paddingBottom: insets.bottom + 120, gap: 16 }}>
+          <View style={styles.resultHero}>
+            <Text style={styles.resultLabel}>NOTE EN COURS DE ROUTE</Text>
+            {showGrade ? (
+              <>
+                <Text style={styles.grade} testID="partial-grade">
+                  {fmt(partialResult.grade_on_20)}
+                  <Text style={styles.gradeMax}> / 20</Text>
+                </Text>
+                <Text style={styles.resultPoints}>
+                  {fmt(partialResult.total_points)} / {partialResult.max_points} points
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.grade} testID="partial-grade">
+                  {partialResult.results.filter((r) => r.points === 1).length}
+                  <Text style={styles.gradeMax}> / {partialResult.max_points}</Text>
+                </Text>
+                <Text style={styles.resultPoints}>questions parfaites</Text>
+              </>
+            )}
+          </View>
+          <Text style={styles.feedback}>
+            Sur {partialResult.max_points} question{partialResult.max_points > 1 ? "s" : ""} faite
+            {partialResult.max_points > 1 ? "s" : ""}. La session reprendra où vous vous êtes arrêté(e) la prochaine
+            fois que vous l'ouvrirez.
+          </Text>
+
+          {missed.length > 0 ? (
+            <Pressable style={styles.toggleMissed} onPress={() => setShowMissed((v) => !v)} testID="toggle-missed-partial">
+              <Ionicons name={showMissed ? "eye-off-outline" : "eye-outline"} size={20} color={colors.brandPrimary} />
+              <Text style={styles.toggleMissedText}>
+                {showMissed ? "Masquer" : "Revoir"} les {missed.length} question(s) ratée(s)
+              </Text>
+            </Pressable>
+          ) : null}
+
+          {showMissed
+            ? missed.map((r) => {
+                const q = byId[r.question_id];
+                if (!q) return null;
+                const ql = Object.keys(q.options);
+                return (
+                  <View key={r.question_id} style={styles.missedCard}>
+                    <Text style={styles.missedPts}>{fmt(r.points)} pt</Text>
+                    <Text style={styles.missedQ}>{q.q}</Text>
+                    {ql.map((l) => {
+                      const isCorrect = q.correct.includes(l);
+                      const wasSel = r.selected.includes(l);
+                      return (
+                        <View key={l} style={styles.missedOpt}>
+                          <Ionicons
+                            name={isCorrect ? "checkmark-circle" : wasSel ? "close-circle" : "ellipse-outline"}
+                            size={16}
+                            color={isCorrect ? colors.success : wasSel ? colors.error : colors.muted}
+                          />
+                          <Text style={[styles.missedOptText, isCorrect && { color: colors.success, fontFamily: fonts.semibold }]}>
+                            {l}. {q.options[l]}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                    <Text style={styles.missedExp}>{q.explanation}</Text>
+                  </View>
+                );
+              })
+            : null}
+        </ScrollView>
+        <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 12 }]}>
+          <Button title="Terminer pour l'instant" onPress={() => router.back()} testID="finish-partial-button" />
+        </View>
+      </View>
+    );
+  }
+
   // ---------- PLAYER SCREEN ----------
   const progress = ((answered ? index + 1 : index) / total) * 100;
   const dCount = answered ? discordanceCount(selected, current.correct, letters) : 0;
@@ -402,7 +515,7 @@ export default function QuizPlay() {
       {/* Header + progress */}
       <View style={[styles.playerHeader, { paddingTop: insets.top + 8 }]}>
         <View style={styles.playerTopRow}>
-          <Pressable onPress={() => router.back()} hitSlop={10} testID="quiz-close">
+          <Pressable onPress={handleClose} hitSlop={10} testID="quiz-close">
             <Ionicons name="close" size={26} color={colors.onSurface} />
           </Pressable>
           <Text style={styles.progressLabel}>
@@ -491,6 +604,36 @@ export default function QuizPlay() {
           />
         )}
       </View>
+
+      {/* Close-button menu: quit mid-session, with the option to see a grade on answered questions only */}
+      <Modal visible={showCloseMenu} transparent animationType="fade" onRequestClose={() => setShowCloseMenu(false)}>
+        <Pressable style={styles.closeBackdrop} onPress={() => setShowCloseMenu(false)} />
+        <View style={styles.closeSheetWrap}>
+          <View style={styles.closeSheet}>
+            <Text style={styles.closeSheetTitle}>Quitter la session ?</Text>
+            <Text style={styles.closeSheetSubtitle}>
+              {Object.keys(answers).length} question{Object.keys(answers).length > 1 ? "s" : ""} répondue
+              {Object.keys(answers).length > 1 ? "s" : ""} pour l'instant.
+            </Text>
+            <Pressable
+              style={styles.closeOptPrimary}
+              onPress={() => {
+                setShowCloseMenu(false);
+                setPartialView(true);
+              }}
+              testID="close-see-grade"
+            >
+              <Text style={styles.closeOptPrimaryText}>Voir ma note</Text>
+            </Pressable>
+            <Pressable style={styles.closeOptSecondary} onPress={() => router.back()} testID="close-no-grade">
+              <Text style={styles.closeOptSecondaryText}>Quitter sans voir la note</Text>
+            </Pressable>
+            <Pressable style={{ marginTop: 4 }} onPress={() => setShowCloseMenu(false)} testID="close-cancel">
+              <Text style={styles.closeCancel}>Continuer la session</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -526,6 +669,17 @@ const useStyles = makeStyles((colors) => ({
   },
   timerPillText: { fontSize: 15, fontFamily: fonts.extrabold, color: "#000" },
   timerPillTextDone: { color: colors.error },
+
+  closeBackdrop: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(15,23,42,0.45)" },
+  closeSheetWrap: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
+  closeSheet: { backgroundColor: colors.surface, borderRadius: 20, padding: 24, width: "100%", maxWidth: 420 },
+  closeSheetTitle: { fontSize: 18, fontFamily: fonts.extrabold, color: colors.onSurface, textAlign: "center", marginBottom: 6 },
+  closeSheetSubtitle: { fontSize: 14, fontFamily: fonts.regular, color: colors.muted, textAlign: "center", marginBottom: 20 },
+  closeOptPrimary: { backgroundColor: colors.brandPrimary, borderRadius: 14, paddingVertical: 14, alignItems: "center", marginBottom: 10 },
+  closeOptPrimaryText: { fontSize: 15, fontFamily: fonts.bold, color: colors.onBrandPrimary },
+  closeOptSecondary: { backgroundColor: colors.surfaceSecondary, borderRadius: 14, paddingVertical: 14, alignItems: "center", borderWidth: 1, borderColor: colors.border },
+  closeOptSecondaryText: { fontSize: 15, fontFamily: fonts.bold, color: colors.onSurface },
+  closeCancel: { textAlign: "center", fontSize: 14, fontFamily: fonts.semibold, color: colors.muted, marginTop: 12 },
 
   playerHeader: {
     paddingHorizontal: 16,
