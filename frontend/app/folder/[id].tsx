@@ -17,7 +17,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@react-native-vector-icons/ionicons";
 
-import { apiFetch, uploadAnnale, uploadSource } from "@/src/api";
+import { apiFetch, fileUrl, uploadAnnale, uploadSource } from "@/src/api";
 import { DEFAULT_FOLDER_COLOR, lighten, tintBg } from "@/src/colors";
 import { Button } from "@/src/components/button";
 import { FolderFormModal, FolderJConfig } from "@/src/components/folder-form-modal";
@@ -39,7 +39,7 @@ type Folder = {
   breadcrumb: { id: string; name: string }[];
 };
 type SubFolder = { id: string; name: string; color?: string; subfolder_count: number; source_count: number };
-type Source = { id: string; name: string; kind: string };
+type Source = { id: string; name: string; kind: string; storage_path?: string | null; text_content?: string | null };
 type Quiz = { id: string; title: string; kind: string; question_count: number };
 type GenJob = {
   id: string;
@@ -73,6 +73,7 @@ export default function FolderDetail() {
   const [textBody, setTextBody] = useState("");
   const [uploading, setUploading] = useState(false);
   const [showAnnale, setShowAnnale] = useState(false);
+  const [viewText, setViewText] = useState<{ name: string; text: string } | null>(null);
 
   const folderQ = useQuery({ queryKey: ["folder", id], queryFn: () => apiFetch<Folder>(`/folders/${id}`) });
   const subsQ = useQuery({ queryKey: ["folders", id], queryFn: () => apiFetch<SubFolder[]>(`/folders?parent_id=${id}`) });
@@ -244,7 +245,7 @@ export default function FolderDetail() {
     const a = res.assets[0];
     await doUpload(a.uri, a.fileName || "photo.jpg", a.mimeType || "image/jpeg");
   };
-    const doUploadAnnale = async (uri: string, name: string, type: string) => {
+  const doUploadAnnale = async (uri: string, name: string, type: string) => {
     setShowAnnale(false);
     setUploading(true);
     try {
@@ -281,7 +282,7 @@ export default function FolderDetail() {
     const a = res.assets[0];
     await doUploadAnnale(a.uri, a.fileName || "annale.jpg", a.mimeType || "image/jpeg");
   };
-  
+
   const doUpload = async (uri: string, name: string, type: string) => {
     setUploading(true);
     try {
@@ -292,6 +293,23 @@ export default function FolderDetail() {
       toast.show(e.message || "Échec de l'envoi", "error");
     } finally {
       setUploading(false);
+    }
+  };
+
+  const openSource = async (s: Source) => {
+    if (s.kind === "text") {
+      setViewText({ name: s.name, text: s.text_content || "" });
+      return;
+    }
+    if (!s.storage_path) {
+      toast.show("Fichier introuvable", "error");
+      return;
+    }
+    try {
+      const url = await fileUrl(s.storage_path);
+      await Linking.openURL(url);
+    } catch {
+      toast.show("Impossible d'ouvrir le fichier", "error");
     }
   };
 
@@ -352,7 +370,7 @@ export default function FolderDetail() {
           )}
         </View>
 
-           {/* Sources */}
+        {/* Sources */}
         <View style={styles.section}>
           <View style={styles.sectionHead}>
             <Text style={styles.sectionTitle}>
@@ -375,7 +393,12 @@ export default function FolderDetail() {
           {srcQ.data && srcQ.data.length > 0 ? (
             <View style={{ gap: 10 }}>
               {srcQ.data.map((s) => (
-                <View key={s.id} style={styles.row} testID={`source-${s.id}`}>
+                <Pressable
+                  key={s.id}
+                  testID={`source-${s.id}`}
+                  style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+                  onPress={() => openSource(s)}
+                >
                   <View style={[styles.iconWell, { backgroundColor: colors.surfaceTertiary }]}>
                     <Ionicons name={(SRC_ICON[s.kind] || "document") as any} size={20} color={colors.onSurfaceSecondary} />
                   </View>
@@ -385,7 +408,7 @@ export default function FolderDetail() {
                   <Pressable onPress={() => delSource.mutate(s.id)} hitSlop={8} testID={`del-source-${s.id}`}>
                     <Ionicons name="trash-outline" size={20} color={colors.error} />
                   </Pressable>
-                </View>
+                </Pressable>
               ))}
             </View>
           ) : (
@@ -472,7 +495,7 @@ export default function FolderDetail() {
             </Text>
           </Pressable>
         ) : null}
-        
+
         {/* Méthode des J */}
         <View style={styles.section}>
           <View style={styles.sectionHead}>
@@ -606,7 +629,7 @@ export default function FolderDetail() {
           </Pressable>
         </View>
       </Modal>
-      
+
       {/* Text source modal */}
       <Modal visible={showText} transparent animationType="slide" onRequestClose={() => setShowText(false)}>
         <Pressable style={styles.backdrop} onPress={() => setShowText(false)} />
@@ -637,6 +660,20 @@ export default function FolderDetail() {
             loading={addText.isPending}
             testID="text-source-submit"
           />
+        </View>
+      </Modal>
+
+      {/* View pasted-text source modal */}
+      <Modal visible={!!viewText} transparent animationType="slide" onRequestClose={() => setViewText(null)}>
+        <Pressable style={styles.backdrop} onPress={() => setViewText(null)} />
+        <View style={[styles.sheet, { maxHeight: "80%" }]}>
+          <View style={styles.handle} />
+          <Text style={styles.sheetTitle} numberOfLines={1}>
+            {viewText?.name}
+          </Text>
+          <ScrollView style={{ maxHeight: 420 }}>
+            <Text style={styles.viewTextBody}>{viewText?.text}</Text>
+          </ScrollView>
         </View>
       </Modal>
 
@@ -781,6 +818,7 @@ const useStyles = makeStyles((colors) => ({
     marginBottom: 12,
   },
   textarea: { minHeight: 160, textAlignVertical: "top" },
+  viewTextBody: { fontSize: 15, fontFamily: fonts.regular, color: colors.onSurface, lineHeight: 22, paddingBottom: 24 },
   centerModal: { flex: 1, backgroundColor: "rgba(15,23,42,0.45)", alignItems: "center", justifyContent: "center", padding: 24 },
   genCard: { backgroundColor: colors.surface, borderRadius: 20, padding: 24, width: "100%", maxWidth: 420 },
   genTitle: { fontSize: 18, fontFamily: fonts.extrabold, color: colors.onSurface, textAlign: "center", marginBottom: 16 },
