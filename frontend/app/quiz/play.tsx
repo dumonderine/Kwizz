@@ -40,6 +40,11 @@ function pointsFor(d: number) {
 function fmt(n: number) {
   return Number.isInteger(n) ? `${n}` : n.toFixed(1).replace(".", ",");
 }
+function fmtTime(sec: number) {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${s < 10 ? "0" : ""}${s}`;
+}
 function shuffleOptions(q: Question): any {
   const letters = Object.keys(q.options);
   const order = [...letters];
@@ -93,6 +98,11 @@ export default function QuizPlay() {
   const [result, setResult] = useState<SubmitResult | null>(null);
   const [showMissed, setShowMissed] = useState(false);
   const [flagged, setFlagged] = useState<Record<string, boolean>>({});
+  const [timerOn, setTimerOn] = useState<boolean | null>(null);
+  const [durationPicked, setDurationPicked] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [remaining, setRemaining] = useState(0);
+  const [paused, setPaused] = useState(false);
   const flagReview = useMutation({
     mutationFn: (questionId: string) =>
       apiFetch("/quizzes/flag-review", { body: { quiz_id: quizId, question_id: questionId } }),
@@ -103,7 +113,7 @@ export default function QuizPlay() {
     onError: (e: any) => toast.show(e.message || "Erreur", "error"),
   });
 
-    const questions = useMemo(() => (quiz?.questions || []).map(shuffleOptions), [quiz?.id]);
+  const questions = useMemo(() => (quiz?.questions || []).map(shuffleOptions), [quiz?.id]);
 
   useEffect(() => {
     if (!quiz) return;
@@ -119,6 +129,12 @@ export default function QuizPlay() {
       } catch {}
     })();
   }, [quiz?.id]);
+
+  useEffect(() => {
+    if (!timerOn || !durationPicked || paused || finished) return;
+    const id = setInterval(() => setRemaining((r) => (r > 0 ? r - 1 : 0)), 1000);
+    return () => clearInterval(id);
+  }, [timerOn, durationPicked, paused, finished]);
 
   const current = questions[index];
   const letters = useMemo(() => (current ? Object.keys(current.options) : []), [current]);
@@ -143,7 +159,7 @@ export default function QuizPlay() {
     apiFetch("/quizzes/answer", { body: { quiz_id: quizId, question_id: current.id, selected: originalSelected } }).catch(() => {});
   };
 
-    const submitAll = async (finalAnswers: Record<string, string[]>) => {
+  const submitAll = async (finalAnswers: Record<string, string[]>) => {
     setSubmitting(true);
     try {
       const byId: Record<string, any> = Object.fromEntries(questions.map((q) => [q.id, q]));
@@ -202,6 +218,65 @@ export default function QuizPlay() {
         <Text style={styles.loadingText}>Erreur de chargement du QCM</Text>
         <Pressable onPress={() => router.back()}>
           <Text style={styles.retry}>Retour</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  if (timerOn === null && !finished) {
+    return (
+      <View style={styles.centerScreen}>
+        <Ionicons name="stopwatch-outline" size={48} color={colors.brandPrimary} />
+        <Text style={styles.timerChoiceTitle}>Session chronométrée ?</Text>
+        <View style={{ flexDirection: "row", gap: 12, marginTop: 20 }}>
+          <Pressable
+            style={styles.timerChoiceBtn}
+            onPress={() => {
+              setDuration(total * 60);
+              setTimerOn(true);
+            }}
+            testID="timer-on"
+          >
+            <Text style={styles.timerChoiceBtnText}>Oui</Text>
+          </Pressable>
+          <Pressable
+            style={styles.timerChoiceBtnAlt}
+            onPress={() => {
+              setTimerOn(false);
+              setDurationPicked(true);
+            }}
+            testID="timer-off"
+          >
+            <Text style={styles.timerChoiceBtnAltText}>Non</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+
+  if (timerOn === true && !durationPicked && !finished) {
+    return (
+      <View style={styles.centerScreen}>
+        <Ionicons name="timer-outline" size={48} color={colors.brandPrimary} />
+        <Text style={styles.timerChoiceTitle}>Combien de temps pour cette session ?</Text>
+        <View style={styles.durationRow}>
+          <Pressable style={styles.durationBtn} onPress={() => setDuration((d) => Math.max(60, d - 60))} testID="duration-minus">
+            <Ionicons name="remove" size={22} color={colors.brandPrimary} />
+          </Pressable>
+          <Text style={styles.durationText}>{fmtTime(duration)}</Text>
+          <Pressable style={styles.durationBtn} onPress={() => setDuration((d) => d + 60)} testID="duration-plus">
+            <Ionicons name="add" size={22} color={colors.brandPrimary} />
+          </Pressable>
+        </View>
+        <Pressable
+          style={styles.timerChoiceBtn}
+          onPress={() => {
+            setRemaining(duration);
+            setDurationPicked(true);
+          }}
+          testID="duration-confirm"
+        >
+          <Text style={styles.timerChoiceBtnText}>Commencer</Text>
         </Pressable>
       </View>
     );
@@ -335,6 +410,12 @@ export default function QuizPlay() {
           </Text>
           <View style={{ width: 26 }} />
         </View>
+        {timerOn ? (
+          <Pressable style={styles.timerPill} onPress={() => setPaused((p) => !p)} testID="timer-toggle">
+            <Ionicons name={paused ? "play" : "pause"} size={16} color="#000" />
+            <Text style={[styles.timerPillText, remaining === 0 && styles.timerPillTextDone]}>{fmtTime(remaining)}</Text>
+          </Pressable>
+        ) : null}
         <View style={styles.progressTrack}>
           <View style={[styles.progressFill, { width: `${progress}%` }]} testID="progress-fill" />
         </View>
@@ -359,7 +440,7 @@ export default function QuizPlay() {
           ))}
         </View>
 
-               {answered ? (
+        {answered ? (
           <>
             {dCount === 0 ? (
               <Pressable
@@ -390,7 +471,6 @@ export default function QuizPlay() {
             </View>
           </>
         ) : null}
-        
       </ScrollView>
 
       {/* Sticky CTA */}
@@ -415,11 +495,37 @@ export default function QuizPlay() {
   );
 }
 
+function progressKey(id: string) {
+  return `quiz_progress_${id}`;
+}
+
 const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.surfaceSecondary },
-  centerScreen: { flex: 1, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center", gap: 14 },
+  centerScreen: { flex: 1, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center", gap: 14, paddingHorizontal: 24 },
   loadingText: { fontSize: 15, fontFamily: fonts.semibold, color: colors.muted },
   retry: { fontSize: 15, fontFamily: fonts.bold, color: colors.brandPrimary },
+
+  timerChoiceTitle: { fontSize: 18, fontFamily: fonts.bold, color: colors.onSurface, textAlign: "center", marginTop: 8 },
+  timerChoiceBtn: { backgroundColor: colors.brandPrimary, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 24 },
+  timerChoiceBtnText: { fontSize: 15, fontFamily: fonts.bold, color: colors.onBrandPrimary },
+  timerChoiceBtnAlt: { backgroundColor: colors.surfaceSecondary, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 24, borderWidth: 1, borderColor: colors.border },
+  timerChoiceBtnAltText: { fontSize: 15, fontFamily: fonts.bold, color: colors.onSurface },
+  durationRow: { flexDirection: "row", alignItems: "center", gap: 20, marginTop: 20, marginBottom: 24 },
+  durationBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surfaceSecondary, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.border },
+  durationText: { fontSize: 28, fontFamily: fonts.extrabold, color: colors.onSurface, minWidth: 90, textAlign: "center" },
+  timerPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "#FEF3C7",
+    borderRadius: 999,
+    paddingVertical: 8,
+    marginBottom: 10,
+    alignSelf: "stretch",
+  },
+  timerPillText: { fontSize: 15, fontFamily: fonts.extrabold, color: "#000" },
+  timerPillTextDone: { color: colors.error },
 
   playerHeader: {
     paddingHorizontal: 16,
