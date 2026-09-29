@@ -505,7 +505,7 @@ export default function FolderDetail() {
                     onPress={() => router.push(`/quiz/play?quizId=${q.id}`)}
                   >
                     <View style={[styles.iconWell, { backgroundColor: colors.brandTertiary }]}>
-                      <Ionicons name="help-circle" size={22} color={colors.brandPrimary} />
+                      <Ionicons name="reader" size={20} color={colors.brandPrimary} />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.rowTitle} numberOfLines={1}>
