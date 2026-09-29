@@ -252,7 +252,9 @@ export default function QuizPlay() {
     );
   }
 
-  if (timerOn === null && !finished) {
+  const isReview = quiz.kind === "review";
+
+  if (timerOn === null && !finished && !isReview) {
     return (
       <View style={styles.centerScreen}>
         <Ionicons name="stopwatch-outline" size={48} color={colors.brandPrimary} />
@@ -283,7 +285,7 @@ export default function QuizPlay() {
     );
   }
 
-  if (timerOn === true && !durationPicked && !finished) {
+  if (timerOn === true && !durationPicked && !finished && !isReview) {
     return (
       <View style={styles.centerScreen}>
         <Ionicons name="timer-outline" size={48} color={colors.brandPrimary} />
@@ -775,7 +777,3 @@ const useStyles = makeStyles((colors) => ({
   missedCard: { backgroundColor: colors.surface, borderRadius: 16, padding: 16, borderWidth: 1, borderColor: colors.border, gap: 6 },
   missedPts: { fontSize: 12, fontFamily: fonts.bold, color: colors.warning },
   missedQ: { fontSize: 15, fontFamily: fonts.bold, color: colors.onSurface, lineHeight: 21, marginBottom: 4 },
-  missedOpt: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
-  missedOptText: { flex: 1, fontSize: 13, fontFamily: fonts.regular, color: colors.onSurfaceSecondary, lineHeight: 19 },
-  missedExp: { fontSize: 13, fontFamily: fonts.regular, color: colors.muted, fontStyle: "italic", marginTop: 6, lineHeight: 19 },
-}));
