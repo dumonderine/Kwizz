@@ -755,12 +755,11 @@ def build_prompt(
     avoid: Optional[List[str]] = None,
 ) -> str:
     style = "de type EDN/PASS de difficulté élevée" if is_medecine(field) else "d'examen universitaire exigeants"
-    focus = ""
-    if part and part[1] > 1:
-        focus = (
-            f"- Ce lot est la partie {part[0]}/{part[1]} : découpe mentalement le contenu en {part[1]} parties "
-            f"égales et concentre-toi UNIQUEMENT sur la partie {part[0]} pour éviter les doublons avec les autres lots.\n"
-        )
+    # NOTE: le contenu STATIQUE (identique entre les lots parallèles d'une même génération) est
+    # placé EN PREMIER, et le contenu qui VARIE par lot (numéro de partie, nombre de questions)
+    # est placé EN DERNIER. Cet ordre permet au cache implicite de Gemini (préfixe identique)
+    # de s'activer et de réduire de 75% le coût des tokens d'entrée répétés entre les lots, sans
+    # rien changer au texte de cours envoyé (toujours complet, aucune perte de qualité).
     avoid_block = ""
     if avoid:
         joined = "\n".join(f"- {a[:220]}" for a in avoid[:150])
@@ -769,9 +768,9 @@ def build_prompt(
             "l'identique ni sous une forme trop proche. Choisis d'autres notions, d'autres détails ou "
             "d'autres angles du cours pour varier au maximum par rapport à cette liste :\n" + joined + "\n"
         )
-    return (
-        f"À partir des documents et du texte de cours fournis, génère exactement {num} QCM "
-        f"{style}.\n\n"
+    static_header = (
+        f"Tu vas générer des QCM {style} à partir des documents et du texte de cours fournis "
+        "ci-dessous.\n\n"
         "Contraintes:\n"
         "- Chaque QCM a 5 propositions A, B, C, D, E.\n"
         "- Sur l'ensemble des QCM générés, environ 1 question sur 10 doit avoir une seule bonne "
@@ -786,12 +785,20 @@ def build_prompt(
         "bonnes réponses.\n"
         "- Les questions doivent couvrir le contenu fourni.\n"
         "- L'explication doit être précise, concise (2-4 phrases) et basée sur le cours fourni.\n"
-        + focus + avoid_block +
+        + avoid_block +
         "\nRéponds STRICTEMENT avec un tableau JSON valide, sans markdown, sans texte avant ou après, de cet exact format:\n"
         '[{"q":"énoncé","options":{"A":"...","B":"...","C":"...","D":"...","E":"..."},'
         '"correct":["A","C"],"explanation":"..."}]\n\n'
         + (f"TEXTE DE COURS FOURNI:\n{text_blob}\n" if text_blob else "")
     )
+    focus = ""
+    if part and part[1] > 1:
+        focus = (
+            f"\n- Ce lot est la partie {part[0]}/{part[1]} : découpe mentalement le contenu en {part[1]} parties "
+            f"égales et concentre-toi UNIQUEMENT sur la partie {part[0]} pour éviter les doublons avec les autres lots."
+        )
+    footer = f"\n\nMaintenant, génère exactement {num} QCM en respectant tout ce qui précède.{focus}\n"
+    return static_header + footer
 
 
 MIN_PDF_TEXT = 800
