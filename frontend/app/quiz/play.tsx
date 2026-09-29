@@ -105,6 +105,7 @@ export default function QuizPlay() {
   const [paused, setPaused] = useState(false);
   const [showCloseMenu, setShowCloseMenu] = useState(false);
   const [partialView, setPartialView] = useState(false);
+  const [showTimeUp, setShowTimeUp] = useState(false);
   const flagReview = useMutation({
     mutationFn: (questionId: string) =>
       apiFetch("/quizzes/flag-review", { body: { quiz_id: quizId, question_id: questionId } }),
@@ -137,6 +138,42 @@ export default function QuizPlay() {
     const id = setInterval(() => setRemaining((r) => (r > 0 ? r - 1 : 0)), 1000);
     return () => clearInterval(id);
   }, [timerOn, durationPicked, paused, finished, partialView]);
+
+  // Petit bip sonore (web) + vibration quand le temps est écoulé, en plus du message.
+  const playTimeUpSound = () => {
+    try {
+      if (Platform.OS === "web" && typeof window !== "undefined") {
+        const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
+        if (!Ctx) return;
+        const ctx = new Ctx();
+        const beep = (freq: number, start: number, dur: number) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = "sine";
+          osc.frequency.value = freq;
+          gain.gain.setValueAtTime(0.0001, ctx.currentTime + start);
+          gain.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + start + 0.02);
+          gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + start + dur);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(ctx.currentTime + start);
+          osc.stop(ctx.currentTime + start + dur + 0.05);
+        };
+        beep(880, 0, 0.15);
+        beep(880, 0.22, 0.18);
+      }
+    } catch {}
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+  };
+
+  // Message "Temps écoulé" affiché une seule fois quand le compte à rebours atteint 0.
+  useEffect(() => {
+    if (timerOn && durationPicked && remaining === 0 && !finished && !partialView && !showTimeUp) {
+      setShowTimeUp(true);
+      playTimeUpSound();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remaining, timerOn, durationPicked, finished, partialView]);
 
   const current = questions[index];
   const letters = useMemo(() => (current ? Object.keys(current.options) : []), [current]);
@@ -632,6 +669,32 @@ export default function QuizPlay() {
             </Pressable>
             <Pressable style={{ marginTop: 4 }} onPress={() => setShowCloseMenu(false)} testID="close-cancel">
               <Text style={styles.closeCancel}>Continuer la session</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Temps écoulé : on prévient et on propose de continuer quand même pour finir */}
+      <Modal visible={showTimeUp} transparent animationType="fade" onRequestClose={() => setShowTimeUp(false)}>
+        <View style={styles.closeSheetWrap}>
+          <View style={styles.closeSheet}>
+            <Ionicons name="time-outline" size={40} color={colors.warning} style={{ alignSelf: "center", marginBottom: 10 }} />
+            <Text style={styles.closeSheetTitle}>Temps écoulé !</Text>
+            <Text style={styles.closeSheetSubtitle}>
+              Le temps que vous aviez fixé pour cette session est terminé.
+            </Text>
+            <Pressable style={styles.closeOptPrimary} onPress={() => setShowTimeUp(false)} testID="timeup-continue">
+              <Text style={styles.closeOptPrimaryText}>Continuer quand même pour finir</Text>
+            </Pressable>
+            <Pressable
+              style={styles.closeOptSecondary}
+              onPress={() => {
+                setShowTimeUp(false);
+                setPartialView(true);
+              }}
+              testID="timeup-see-grade"
+            >
+              <Text style={styles.closeOptSecondaryText}>Voir ma note maintenant</Text>
             </Pressable>
           </View>
         </View>
