@@ -235,6 +235,19 @@ def clean(doc: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Auth routes
 # ---------------------------------------------------------------------------
+def is_approved(u: dict) -> bool:
+    # Les comptes créés AVANT cette fonctionnalité n'ont pas le champ "approved" en base :
+    # on les considère approuvés par défaut pour ne bloquer personne d'existant.
+    # Seuls les NOUVEAUX comptes (register ci-dessous) démarrent avec approved=False.
+    return bool(u.get("approved", True))
+
+
+PENDING_APPROVAL_MESSAGE = (
+    "Ton compte a bien été créé ! Il est en attente de validation, tu recevras un accès très "
+    "prochainement."
+)
+
+
 @api_router.post("/auth/register")
 async def register(data: RegisterIn):
     email = data.email.lower().strip()
@@ -247,10 +260,16 @@ async def register(data: RegisterIn):
         "password_hash": hash_password(data.password),
         "study_field": None,
         "show_grade": True,
+        "approved": False,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.users.insert_one(user)
-    return {"token": make_token(user["id"]), "user": public_user(user)}
+    return {
+        "pending": True,
+        "token": None,
+        "user": None,
+        "message": PENDING_APPROVAL_MESSAGE,
+    }
 
 
 @api_router.post("/auth/login")
@@ -259,7 +278,12 @@ async def login(data: LoginIn):
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(data.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
-    return {"token": make_token(user["id"]), "user": public_user(user)}
+    if not is_approved(user):
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "PENDING_APPROVAL", "message": PENDING_APPROVAL_MESSAGE},
+        )
+    return {"pending": False, "token": make_token(user["id"]), "user": public_user(user)}
 
 
 @api_router.get("/auth/me")
