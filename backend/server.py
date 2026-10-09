@@ -922,7 +922,64 @@ def _parse_questions(raw: str) -> List[dict]:
     return out
 
 
-async def _generate_batch(system: str, prompt: str, file_contents: List, max_tokens: int = 16000) -> List[dict]:
+# ---------------------------------------------------------------------------
+# Suivi du coût Gemini (collection "usage_logs") : pour savoir combien coûte vraiment un QCM.
+# Prix en USD par million de jetons (entrée, sortie). Les jetons d'entrée déjà en cache sont
+# facturés 25% du prix normal (remise de 75%). Les jetons de "réflexion" comptent comme de la sortie.
+# Le taux USD -> EUR est approximatif : les jetons bruts sont aussi enregistrés pour recalculer.
+# ---------------------------------------------------------------------------
+USD_TO_EUR = 0.86
+MODEL_PRICES_USD_PER_M = {
+    "gemini-3.5-flash": (1.50, 9.00),
+    "gemini-3.1-pro-preview": (2.00, 12.00),
+}
+
+
+def _usage_from_response(resp) -> Dict[str, int]:
+    um = getattr(resp, "usage_metadata", None)
+    prompt = int(getattr(um, "prompt_token_count", 0) or 0)
+    cached = int(getattr(um, "cached_content_token_count", 0) or 0)
+    total = int(getattr(um, "total_token_count", 0) or 0)
+    cand = int(getattr(um, "candidates_token_count", 0) or 0)
+    output = max(total - prompt, cand) if total else cand
+    return {"prompt_tokens": prompt, "cached_tokens": cached, "output_tokens": output}
+
+
+def _estimate_cost_eur(model_name: str, usages: List[Dict[str, int]]) -> float:
+    price_in, price_out = MODEL_PRICES_USD_PER_M.get(model_name, MODEL_PRICES_USD_PER_M["gemini-3.5-flash"])
+    usd = 0.0
+    for u in usages:
+        fresh = max(u["prompt_tokens"] - u["cached_tokens"], 0)
+        usd += (fresh * price_in + u["cached_tokens"] * price_in * 0.25 + u["output_tokens"] * price_out) / 1_000_000
+    return round(usd * USD_TO_EUR, 5)
+
+
+async def _log_usage(owner_id: str, kind: str, model_name: str, usages: List[Dict[str, int]], questions: int, job_id: Optional[str] = None) -> None:
+    """Enregistre le coût d'une génération. Ne doit JAMAIS faire échouer la génération."""
+    try:
+        cost = _estimate_cost_eur(model_name, usages)
+        await db.usage_logs.insert_one(
+            {
+                "id": str(uuid.uuid4()),
+                "owner_id": owner_id,
+                "job_id": job_id,
+                "kind": kind,
+                "model": model_name,
+                "calls": len(usages),
+                "prompt_tokens": sum(u["prompt_tokens"] for u in usages),
+                "cached_tokens": sum(u["cached_tokens"] for u in usages),
+                "output_tokens": sum(u["output_tokens"] for u in usages),
+                "questions": questions,
+                "cost_eur": cost,
+                "cost_eur_per_question": round(cost / questions, 5) if questions else None,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+    except Exception as e:
+        logger.warning("usage log failed: %s", e)
+
+
+async def _generate_batch(system: str, prompt: str, file_contents: List, max_tokens: int = 16000, usage_sink: Optional[List[Dict[str, int]]] = None) -> List[dict]:
     model = genai.GenerativeModel(model_name=GEN_MODEL.replace("gemini-", "models/gemini-") if not GEN_MODEL.startswith("models/") else GEN_MODEL, system_instruction=system)
     parts = [prompt]
     for fc in (file_contents or []):
@@ -932,6 +989,12 @@ async def _generate_batch(system: str, prompt: str, file_contents: List, max_tok
     for _ in range(2):
         try:
             resp = await run_in_threadpool(model.generate_content, parts, generation_config={"max_output_tokens": max_tokens})
+            if usage_sink is not None:
+                # Enregistré avant de lire le texte : une réponse inutilisable a quand même coûté des jetons.
+                try:
+                    usage_sink.append(_usage_from_response(resp))
+                except Exception:
+                    pass
             raw = resp.text
             return _parse_questions(raw)
         except Exception as e:
@@ -1002,11 +1065,13 @@ async def run_generation_job(job_id: str):
         blob = "\n\n".join(text_parts)
         system = build_system(field)
 
+        usage_sink: List[Dict[str, int]] = []
         tasks = [
             _generate_batch(
                 system,
                 build_prompt(sizes[i], blob, field, (i + 1, n_batches), avoid=avoid_questions),
                 file_contents,
+                usage_sink=usage_sink,
             )
             for i in range(n_batches)
         ]
@@ -1034,6 +1099,7 @@ async def run_generation_job(job_id: str):
                         origin_topic_name=origin["topic_name"],
                     )
                 )
+        await _log_usage(job["owner_id"], "generation", GEN_MODEL, usage_sink, len(questions[:num]), job_id=job_id)
         if not questions:
             raise RuntimeError("Aucune question générée, réessayez.")
 
@@ -1568,6 +1634,10 @@ async def course_chat(data: ChatIn, user: dict = Depends(current_user)):
             except OSError:
                 pass
 
+    try:
+        await _log_usage(user["id"], "chat", GEMINI_MODEL, [_usage_from_response(resp)], 0)
+    except Exception:
+        pass
     answer = resp.text
     return {"answer": answer}
 
@@ -1620,7 +1690,11 @@ async def run_annale_job(job_id: str, content: bytes, mime: str, ext: str):
         )
         file_contents = [_FileRef(file_path=tmp_path, mime_type=mime)]
 
-        raw_questions = await _generate_batch(system, build_annale_prompt(), file_contents, max_tokens=32000)
+        annale_usage: List[Dict[str, int]] = []
+        try:
+            raw_questions = await _generate_batch(system, build_annale_prompt(), file_contents, max_tokens=32000, usage_sink=annale_usage)
+        finally:
+            await _log_usage(job["owner_id"], "annale", GEN_MODEL, annale_usage, 0, job_id=job_id)
         if not raw_questions:
             raise RuntimeError("Aucune question détectée dans cette annale, réessayez avec une version plus lisible.")
 
