@@ -800,13 +800,16 @@ def build_system(field: Optional[str]) -> str:
     )
 
 
-def build_prompt(
+def build_prompt_parts(
     num: int,
     text_blob: str,
     field: Optional[str] = None,
     part: Optional[tuple] = None,
     avoid: Optional[List[str]] = None,
-) -> str:
+) -> tuple:
+    """Retourne (partie_fixe, partie_variable). La partie fixe (consignes + cours) est identique
+    pour tous les lots d'une même génération : c'est elle qu'on peut mettre en cache chez Gemini.
+    La partie variable ne contient que le nombre de questions et le numéro de lot."""
     style = "de type EDN/PASS de difficulté élevée" if is_medecine(field) else "d'examen universitaire exigeants"
     # NOTE: le contenu STATIQUE (identique entre les lots parallèles d'une même génération) est
     # placé EN PREMIER, et le contenu qui VARIE par lot (numéro de partie, nombre de questions)
@@ -851,6 +854,17 @@ def build_prompt(
             f"égales et concentre-toi UNIQUEMENT sur la partie {part[0]} pour éviter les doublons avec les autres lots."
         )
     footer = f"\n\nMaintenant, génère exactement {num} QCM en respectant tout ce qui précède.{focus}\n"
+    return static_header, footer
+
+
+def build_prompt(
+    num: int,
+    text_blob: str,
+    field: Optional[str] = None,
+    part: Optional[tuple] = None,
+    avoid: Optional[List[str]] = None,
+) -> str:
+    static_header, footer = build_prompt_parts(num, text_blob, field, part, avoid)
     return static_header + footer
 
 
@@ -954,10 +968,14 @@ def _estimate_cost_eur(model_name: str, usages: List[Dict[str, int]]) -> float:
     return round(usd * USD_TO_EUR, 5)
 
 
-async def _log_usage(owner_id: str, kind: str, model_name: str, usages: List[Dict[str, int]], questions: int, job_id: Optional[str] = None) -> None:
+async def _log_usage(owner_id: str, kind: str, model_name: str, usages: List[Dict[str, int]], questions: int, job_id: Optional[str] = None, cache_used: bool = False, cache_tokens: int = 0) -> None:
     """Enregistre le coût d'une génération. Ne doit JAMAIS faire échouer la génération."""
     try:
-        cost = _estimate_cost_eur(model_name, usages)
+        # La création du cache est comptée comme une lecture du cours au prix normal (estimation prudente).
+        priced = list(usages)
+        if cache_tokens:
+            priced.append({"prompt_tokens": cache_tokens, "cached_tokens": 0, "output_tokens": 0})
+        cost = _estimate_cost_eur(model_name, priced)
         await db.usage_logs.insert_one(
             {
                 "id": str(uuid.uuid4()),
@@ -966,6 +984,8 @@ async def _log_usage(owner_id: str, kind: str, model_name: str, usages: List[Dic
                 "kind": kind,
                 "model": model_name,
                 "calls": len(usages),
+                "cache_used": cache_used,
+                "cache_creation_tokens": cache_tokens,
                 "prompt_tokens": sum(u["prompt_tokens"] for u in usages),
                 "cached_tokens": sum(u["cached_tokens"] for u in usages),
                 "output_tokens": sum(u["output_tokens"] for u in usages),
@@ -979,16 +999,77 @@ async def _log_usage(owner_id: str, kind: str, model_name: str, usages: List[Dic
         logger.warning("usage log failed: %s", e)
 
 
-async def _generate_batch(system: str, prompt: str, file_contents: List, max_tokens: int = 16000, usage_sink: Optional[List[Dict[str, int]]] = None) -> List[dict]:
-    model = genai.GenerativeModel(model_name=GEN_MODEL.replace("gemini-", "models/gemini-") if not GEN_MODEL.startswith("models/") else GEN_MODEL, system_instruction=system)
+# ---------------------------------------------------------------------------
+# Cache du cours chez Gemini : pour les générations de 3 lots ou plus (21+ questions), le cours
+# est envoyé UNE fois puis réutilisé par chaque lot à prix réduit (-75% sur ces jetons).
+# Chaque lot reçoit exactement le même texte qu'avant : la qualité ne change pas.
+# Si quoi que ce soit échoue (modèle non compatible, cours trop petit, erreur réseau...), on
+# retombe automatiquement sur le fonctionnement normal. Désactivable sans code :
+# variable d'environnement USE_COURSE_CACHE=0 sur Render.
+# ---------------------------------------------------------------------------
+USE_COURSE_CACHE = os.environ.get("USE_COURSE_CACHE", "1") == "1"
+CACHE_MIN_BATCHES = 3
+CACHE_TTL_MINUTES = 10
+
+
+def _gen_model_path() -> str:
+    return GEN_MODEL.replace("gemini-", "models/gemini-") if not GEN_MODEL.startswith("models/") else GEN_MODEL
+
+
+async def _create_course_cache(system: str, static_prompt: str, file_contents: List):
+    """Retourne (cache, nombre_de_jetons_mis_en_cache), ou (None, 0) si le cache n'a pas pu être créé."""
+    try:
+        from google.generativeai import caching
+
+        contents: List[Any] = [static_prompt]
+        for fc in (file_contents or []):
+            with open(fc.file_path, "rb") as f:
+                contents.append({"mime_type": fc.mime_type, "data": f.read()})
+
+        def _create():
+            return caching.CachedContent.create(
+                model=_gen_model_path(),
+                display_name="kwizz-course",
+                system_instruction=system,
+                contents=contents,
+                ttl=timedelta(minutes=CACHE_TTL_MINUTES),
+            )
+
+        cache = await run_in_threadpool(_create)
+        tokens = 0
+        try:
+            tokens = int(getattr(getattr(cache, "usage_metadata", None), "total_token_count", 0) or 0)
+        except Exception:
+            tokens = 0
+        return cache, tokens
+    except Exception as e:
+        logger.warning("course cache unavailable, falling back to normal calls: %s", e)
+        return None, 0
+
+
+async def _delete_course_cache(cache) -> None:
+    try:
+        await run_in_threadpool(cache.delete)
+    except Exception as e:
+        logger.warning("course cache delete failed (it will expire by itself): %s", e)
+
+
+async def _generate_batch(system: str, prompt: str, file_contents: List, max_tokens: int = 16000, usage_sink: Optional[List[Dict[str, int]]] = None, cache=None, dynamic_prompt: Optional[str] = None) -> List[dict]:
+    model = genai.GenerativeModel(model_name=_gen_model_path(), system_instruction=system)
     parts = [prompt]
     for fc in (file_contents or []):
         with open(fc.file_path, "rb") as f:
             parts.append({"mime_type": fc.mime_type, "data": f.read()})
     last_err: Optional[Exception] = None
-    for _ in range(2):
+    for attempt in range(2):
         try:
-            resp = await run_in_threadpool(model.generate_content, parts, generation_config={"max_output_tokens": max_tokens})
+            call_model, call_parts = model, parts
+            if cache is not None and dynamic_prompt is not None and attempt == 0:
+                # Premier essai avec le cache : seul le petit bout variable est envoyé.
+                # En cas d'échec, le 2e essai repart sur le chemin normal (cours complet).
+                call_model = genai.GenerativeModel.from_cached_content(cached_content=cache)
+                call_parts = [dynamic_prompt]
+            resp = await run_in_threadpool(call_model.generate_content, call_parts, generation_config={"max_output_tokens": max_tokens})
             if usage_sink is not None:
                 # Enregistré avant de lire le texte : une réponse inutilisable a quand même coûté des jetons.
                 try:
@@ -1066,16 +1147,29 @@ async def run_generation_job(job_id: str):
         system = build_system(field)
 
         usage_sink: List[Dict[str, int]] = []
-        tasks = [
-            _generate_batch(
-                system,
-                build_prompt(sizes[i], blob, field, (i + 1, n_batches), avoid=avoid_questions),
-                file_contents,
-                usage_sink=usage_sink,
-            )
-            for i in range(n_batches)
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        cache = None
+        cache_tokens = 0
+        if USE_COURSE_CACHE and n_batches >= CACHE_MIN_BATCHES:
+            static_prompt, _footer = build_prompt_parts(sizes[0], blob, field, (1, n_batches), avoid=avoid_questions)
+            cache, cache_tokens = await _create_course_cache(system, static_prompt, file_contents)
+        try:
+            tasks = []
+            for i in range(n_batches):
+                static_i, footer_i = build_prompt_parts(sizes[i], blob, field, (i + 1, n_batches), avoid=avoid_questions)
+                tasks.append(
+                    _generate_batch(
+                        system,
+                        static_i + footer_i,
+                        file_contents,
+                        usage_sink=usage_sink,
+                        cache=cache,
+                        dynamic_prompt=footer_i,
+                    )
+                )
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            if cache is not None:
+                await _delete_course_cache(cache)
 
         origin = await folder_meta(job["folder_id"])
         questions: List[dict] = []
@@ -1099,7 +1193,7 @@ async def run_generation_job(job_id: str):
                         origin_topic_name=origin["topic_name"],
                     )
                 )
-        await _log_usage(job["owner_id"], "generation", GEN_MODEL, usage_sink, len(questions[:num]), job_id=job_id)
+        await _log_usage(job["owner_id"], "generation", GEN_MODEL, usage_sink, len(questions[:num]), job_id=job_id, cache_used=cache is not None, cache_tokens=cache_tokens)
         if not questions:
             raise RuntimeError("Aucune question générée, réessayez.")
 
