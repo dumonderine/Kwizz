@@ -45,6 +45,26 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = "gemini-3.1-pro-preview"  # chat / explanations
 GEN_MODEL = "gemini-3.5-flash"  # QCM generation: fast, large context, robust JSON
 
+# Accès restreint : seules les adresses listées ici peuvent se connecter / utiliser l'appli.
+# Les comptes des autres personnes restent en base (rien n'est supprimé), ils sont juste bloqués.
+# Pour rouvrir à tout le monde plus tard : mettre la variable d'environnement ALLOWED_EMAILS
+# à "*" sur Render (sans toucher au code). Pour autoriser plusieurs personnes : séparer les
+# adresses par des virgules.
+ALLOWED_EMAILS = {
+    e.strip().lower()
+    for e in os.environ.get("ALLOWED_EMAILS", "dumonderine@gmail.com").split(",")
+    if e.strip()
+}
+ACCESS_CLOSED_MESSAGE = (
+    "Kwizz est fermé pour le moment. Ton compte et tes données sont conservés, "
+    "tu pourras te reconnecter à la réouverture."
+)
+
+
+def has_access(email: Optional[str]) -> bool:
+    return "*" in ALLOWED_EMAILS or (email or "").strip().lower() in ALLOWED_EMAILS
+
+
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Object storage
@@ -112,6 +132,8 @@ async def current_user(creds: Optional[HTTPAuthorizationCredentials] = Depends(b
     user = await db.users.find_one({"id": user_id})
     if not user:
         raise HTTPException(status_code=401, detail="Utilisateur introuvable")
+    if not has_access(user.get("email")):
+        raise HTTPException(status_code=403, detail=ACCESS_CLOSED_MESSAGE)
     return user
 
 
@@ -251,6 +273,8 @@ PENDING_APPROVAL_MESSAGE = (
 @api_router.post("/auth/register")
 async def register(data: RegisterIn):
     email = data.email.lower().strip()
+    if not has_access(email):
+        raise HTTPException(status_code=403, detail=ACCESS_CLOSED_MESSAGE)
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=409, detail="Cet email est déjà utilisé")
     user = {
@@ -278,6 +302,8 @@ async def login(data: LoginIn):
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(data.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
+    if not has_access(user.get("email")):
+        raise HTTPException(status_code=403, detail=ACCESS_CLOSED_MESSAGE)
     if not is_approved(user):
         raise HTTPException(
             status_code=403,
@@ -705,6 +731,9 @@ async def get_file(path: str, token: Optional[str] = Query(None)):
     user_id = decode_token(token) if token else None
     if not user_id:
         raise HTTPException(status_code=401, detail="Non authentifié")
+    owner = await db.users.find_one({"id": user_id})
+    if not owner or not has_access(owner.get("email")):
+        raise HTTPException(status_code=403, detail=ACCESS_CLOSED_MESSAGE)
     src = await db.sources.find_one({"storage_path": path, "owner_id": user_id})
     if not src:
         raise HTTPException(status_code=404, detail="Fichier introuvable")
