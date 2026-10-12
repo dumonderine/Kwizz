@@ -40,7 +40,7 @@ type Folder = {
 };
 type SubFolder = { id: string; name: string; color?: string; subfolder_count: number; source_count: number };
 type Source = { id: string; name: string; kind: string; storage_path?: string | null; text_content?: string | null };
-type Quiz = { id: string; title: string; kind: string; question_count: number };
+type Quiz = { id: string; title: string; kind: string; question_count: number; created_at?: string; source_names?: string[] };
 type GenJob = {
   id: string;
   status: "pending" | "running" | "done" | "error";
@@ -511,7 +511,15 @@ export default function FolderDetail() {
                       <Text style={styles.rowTitle} numberOfLines={1}>
                         {q.title}
                       </Text>
-                      <Text style={styles.rowMeta}>{q.question_count} questions</Text>
+                      <Text style={styles.rowMeta}>
+                        {q.question_count} questions
+                        {q.created_at ? ` · ${new Date(q.created_at).toLocaleDateString("fr-FR")}` : ""}
+                      </Text>
+                      {q.source_names && q.source_names.length > 0 ? (
+                        <Text style={styles.rowMeta} numberOfLines={2}>
+                          Sources : {q.source_names.join(" · ")}
+                        </Text>
+                      ) : null}
                     </View>
                     <Pressable onPress={() => delQuiz.mutate(q.id)} hitSlop={8} testID={`del-quiz-${q.id}`}>
                       <Ionicons name="trash-outline" size={20} color={colors.error} />
