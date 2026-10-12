@@ -71,6 +71,7 @@ export default function Accueil() {
   const backlog = st?.backlog ?? 0;
   const paused = !!st?.paused;
   const todayCount = st ? st.today_remaining : anchorSize;
+  const doneToday = !!st && !st.paused && st.done_today;
 
   const anchor = useMutation({
     mutationFn: () => apiFetch<{ id: string }>("/anchor/daily", { body: {} }),
@@ -88,6 +89,10 @@ export default function Accueil() {
     if (anchor.isPending || backlogQuiz.isPending) return;
     if (paused) {
       toast.show(`Ancrages suspendus jusqu'au ${frDate(st!.paused_until!)}`, "error");
+      return;
+    }
+    if (doneToday && backlog === 0) {
+      toast.show("Bravo, ancrage du jour terminé ! Reviens demain 🎉", "success");
       return;
     }
     if (backlog > 0) setShowChoice(true);
@@ -135,10 +140,16 @@ export default function Accueil() {
           <Text style={styles.anchorSub}>Suspendu jusqu'au {frDate(st!.paused_until!)}</Text>
         ) : (
           <>
-            <Text style={styles.anchorSub}>
-              {todayCount > 0 ? `${todayCount} QCM du jour` : "Ancrage du jour terminé ✓"}
-            </Text>
-            {backlog > 0 ? <Text style={styles.anchorBacklog}>+ {backlog} QCM de retard</Text> : null}
+            {doneToday ? (
+              <Text style={styles.anchorDone}>🎉 Bravo, ancrage du jour terminé, reviens demain !</Text>
+            ) : (
+              <Text style={styles.anchorSub}>{todayCount} QCM du jour</Text>
+            )}
+            {backlog > 0 ? (
+              <Text style={styles.anchorBacklog}>
+                + {backlog} QCM de retard
+              </Text>
+            ) : null}
           </>
         )}
       </View>
@@ -225,14 +236,17 @@ export default function Accueil() {
               <Text style={styles.choiceBtnRedText}>Rattraper le retard ({backlog} QCM)</Text>
             </Pressable>
             <Pressable
-              style={styles.choiceBtn}
+              style={[styles.choiceBtn, doneToday && { opacity: 0.45 }]}
+              disabled={doneToday}
               onPress={() => {
                 setShowChoice(false);
                 anchor.mutate();
               }}
               testID="anchor-choice-daily"
             >
-              <Text style={styles.choiceBtnText}>Ancrage du jour ({todayCount} QCM)</Text>
+              <Text style={styles.choiceBtnText}>
+                {doneToday ? "Ancrage du jour terminé ✓" : `Ancrage du jour (${todayCount} QCM)`}
+              </Text>
             </Pressable>
             <Pressable onPress={() => setShowChoice(false)} style={{ marginTop: 6 }}>
               <Text style={styles.choiceCancel}>Annuler</Text>
@@ -259,6 +273,7 @@ const useStyles = makeStyles((colors) => ({
     minHeight: 170,
   },
   pressed: { opacity: 0.7 },
+  anchorDone: { fontSize: 15, fontFamily: fonts.extrabold, color: colors.onSurface },
   anchorBacklog: { fontSize: 14, fontFamily: fonts.extrabold, color: "#DC2626", marginTop: 4 },
   choiceBackdrop: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(15,23,42,0.45)" },
   choiceWrap: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
