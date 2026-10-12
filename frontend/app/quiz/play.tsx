@@ -20,7 +20,7 @@ type Question = {
   correct: string[];
   explanation: string;
 };
-type Quiz = { id: string; title: string; kind: string; folder_id: string | null; questions: Question[] };
+type Quiz = { id: string; title: string; kind: string; folder_id: string | null; questions: Question[]; source_names?: string[] };
 type SubmitResult = {
   total_points: number;
   max_points: number;
@@ -562,6 +562,11 @@ export default function QuizPlay() {
           </Text>
           <View style={{ width: 26 }} />
         </View>
+        {quiz.source_names && quiz.source_names.length > 0 ? (
+          <Text style={styles.sourcesLine} numberOfLines={2} testID="quiz-sources">
+            Sources : {quiz.source_names.join(" · ")}
+          </Text>
+        ) : null}
         {timerOn ? (
           <Pressable style={styles.timerPill} onPress={() => setPaused((p) => !p)} testID="timer-toggle">
             <Ionicons name={paused ? "play" : "pause"} size={16} color="#000" />
@@ -754,6 +759,7 @@ const useStyles = makeStyles((colors) => ({
     borderBottomColor: colors.border,
   },
   playerTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
+  sourcesLine: { fontSize: 12, fontFamily: fonts.semibold, color: colors.muted, textAlign: "center", marginBottom: 10 },
   progressLabel: { fontSize: 13, fontFamily: fonts.bold, color: colors.onSurfaceSecondary },
   progressTrack: { height: 8, borderRadius: 4, backgroundColor: colors.surfaceTertiary, overflow: "hidden" },
   progressFill: { height: 8, borderRadius: 4, backgroundColor: colors.brandPrimary },
