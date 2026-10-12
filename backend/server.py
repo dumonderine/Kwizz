@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
+from zoneinfo import ZoneInfo
 
 import jwt
 import requests
@@ -1204,6 +1205,7 @@ async def run_generation_job(job_id: str):
             "title": f"QCM · {root['name']}",
             "kind": "generated",
             "source_ids": used_source_ids,
+            "source_names": [s_["name"] for s_ in sources if s_.get("name")],
             "questions": questions[:num],
             "created_at": datetime.now(timezone.utc).isoformat(),
             "deleted_at": None,
@@ -1402,36 +1404,38 @@ async def weighted_anchor_sample(user_id: str, pool: List[dict], size: int) -> L
     return chosen
 
 
-@api_router.get("/anchor/status")
-async def anchor_status(user: dict = Depends(current_user)):
+ANCHOR_KINDS = ("anchor", "anchor_backlog")
+ANCHOR_MAX_MISSED_DAYS = 30
+PARIS_TZ = ZoneInfo("Europe/Paris")
+
+
+def paris_today():
+    return datetime.now(PARIS_TZ).date()
+
+
+def _anchor_pauses(user: dict):
+    out = []
+    for p in user.get("anchor_pauses", []) or []:
+        try:
+            out.append((datetime.fromisoformat(p["start"]).date(), datetime.fromisoformat(p["end"]).date()))
+        except Exception:
+            continue
+    return out
+
+
+def _anchor_paused_until(user: dict):
+    """Date de fin (incluse) de la pause en cours, ou None."""
+    t = paris_today()
+    for a, b in _anchor_pauses(user):
+        if a <= t <= b:
+            return b
+    return None
+
+
+async def _anchor_pool(user_id: str) -> List[dict]:
     quizzes = await db.quizzes.find(
-        {"owner_id": user["id"], "kind": "generated", "deleted_at": None}
-    ).to_list(500)
-    pool = sum(len(q.get("questions", [])) for q in quizzes)
-    today = datetime.now(timezone.utc).date().isoformat()
-    todays = await db.quizzes.find_one(
-        {"owner_id": user["id"], "kind": "anchor", "anchor_date": today, "deleted_at": None}
-    )
-    done = False
-    if todays:
-        att = await db.attempts.find_one({"owner_id": user["id"], "quiz_id": todays["id"]})
-        done = att is not None
-    return {"pool_size": pool, "available": pool > 0, "done_today": done}
-
-
-@api_router.post("/anchor/daily")
-async def anchor_daily(user: dict = Depends(current_user)):
-    today = datetime.now(timezone.utc).date().isoformat()
-    existing = await db.quizzes.find_one(
-        {"owner_id": user["id"], "kind": "anchor", "anchor_date": today, "deleted_at": None}
-    )
-    if existing:
-        return clean(existing)
-
-    quizzes = await db.quizzes.find(
-        {"owner_id": user["id"], "kind": "generated", "deleted_at": None}
+        {"owner_id": user_id, "kind": "generated", "deleted_at": None}
     ).to_list(1000)
-
     pool: List[dict] = []
     seen = set()
     for qz in quizzes:
@@ -1441,7 +1445,84 @@ async def anchor_daily(user: dict = Depends(current_user)):
                 continue
             seen.add(key)
             pool.append(question)
+    return pool
 
+
+async def _anchor_backlog_state(user: dict, today_iso: str):
+    """Retourne (questions non faites des jours passés, nombre de jours sans ancrage ouvert)."""
+    past = await db.quizzes.find({
+        "owner_id": user["id"], "kind": "anchor", "deleted_at": None,
+        "anchor_date": {"$lt": today_iso}, "backlog_cleared": {"$ne": True},
+    }).to_list(500)
+    unanswered: List[dict] = []
+    for qz in past:
+        done = set(qz.get("answered_ids", []))
+        for q in qz.get("questions", []):
+            if q["id"] not in done:
+                unanswered.append(dict(q, src_quiz_id=qz["id"], src_question_id=q["id"]))
+    # Jours manqués : entre la date de départ (1er ancrage ou dernière remise à zéro) et aujourd'hui,
+    # sans aucun ancrage ouvert.
+    all_dates = {q["anchor_date"] for q in await db.quizzes.find(
+        {"owner_id": user["id"], "kind": "anchor", "deleted_at": None}, {"anchor_date": 1}
+    ).to_list(2000)}
+    start = user.get("anchor_start_date")
+    missed = 0
+    if start:
+        try:
+            d = datetime.fromisoformat(start).date()
+            t = datetime.fromisoformat(today_iso).date()
+            pauses = _anchor_pauses(user)
+            while d < t and missed < ANCHOR_MAX_MISSED_DAYS:
+                if d.isoformat() not in all_dates and not any(a <= d <= b for a, b in pauses):
+                    missed += 1
+                d += timedelta(days=1)
+        except Exception:
+            missed = 0
+    return unanswered, missed
+
+
+@api_router.get("/anchor/status")
+async def anchor_status(user: dict = Depends(current_user)):
+    pool = await _anchor_pool(user["id"])
+    today = paris_today().isoformat()
+    size = user.get("anchor_size", DEFAULT_ANCHOR_SIZE)
+    todays = await db.quizzes.find_one(
+        {"owner_id": user["id"], "kind": "anchor", "anchor_date": today, "deleted_at": None}
+    )
+    if todays:
+        total = len(todays.get("questions", []))
+        today_remaining = max(0, total - len(set(todays.get("answered_ids", []))))
+    else:
+        total = size
+        today_remaining = size
+    unanswered, missed = await _anchor_backlog_state(user, today)
+    backlog = len(unanswered) + missed * size
+    paused_until = _anchor_paused_until(user)
+    return {
+        "pool_size": len(pool),
+        "available": len(pool) > 0,
+        "done_today": bool(todays) and today_remaining == 0,
+        "today_total": total,
+        "today_remaining": today_remaining,
+        "backlog": backlog,
+        "paused": paused_until is not None,
+        "paused_until": paused_until.isoformat() if paused_until else None,
+    }
+
+
+@api_router.post("/anchor/daily")
+async def anchor_daily(user: dict = Depends(current_user)):
+    today = paris_today().isoformat()
+    pu = _anchor_paused_until(user)
+    if pu:
+        raise HTTPException(status_code=400, detail=f"Ancrages suspendus jusqu'au {pu.strftime('%d/%m/%Y')}.")
+    existing = await db.quizzes.find_one(
+        {"owner_id": user["id"], "kind": "anchor", "anchor_date": today, "deleted_at": None}
+    )
+    if existing:
+        return clean(existing)
+
+    pool = await _anchor_pool(user["id"])
     if not pool:
         raise HTTPException(status_code=400, detail="Générez d'abord des QCM dans vos dossiers.")
 
@@ -1456,12 +1537,149 @@ async def anchor_daily(user: dict = Depends(current_user)):
         "title": "Ancrage du jour",
         "kind": "anchor",
         "anchor_date": today,
+        "answered_ids": [],
         "questions": questions,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "deleted_at": None,
     }
     await db.quizzes.insert_one(quiz)
+    if not user.get("anchor_start_date"):
+        await db.users.update_one({"id": user["id"]}, {"$set": {"anchor_start_date": today}})
     return clean(quiz)
+
+
+@api_router.post("/anchor/backlog")
+async def anchor_backlog_quiz(user: dict = Depends(current_user)):
+    """Crée un quiz 'Retard' : questions non faites des jours passés + jours entièrement manqués."""
+    today = paris_today().isoformat()
+    pu = _anchor_paused_until(user)
+    if pu:
+        raise HTTPException(status_code=400, detail=f"Ancrages suspendus jusqu'au {pu.strftime('%d/%m/%Y')}.")
+    size = user.get("anchor_size", DEFAULT_ANCHOR_SIZE)
+    unanswered, missed = await _anchor_backlog_state(user, today)
+
+    questions = list(unanswered)
+    if missed > 0:
+        pool = await _anchor_pool(user["id"])
+        taken = {q.get("q") for q in questions}
+        pool = [q for q in pool if q.get("q") not in taken] or pool
+        sample = await weighted_anchor_sample(user["id"], pool, missed * size)
+        # Chaque jour manqué devient un quiz d'ancrage "fantôme" pour suivre ce qui est fait.
+        start = datetime.fromisoformat(user.get("anchor_start_date")).date()
+        existing_dates = {q["anchor_date"] for q in await db.quizzes.find(
+            {"owner_id": user["id"], "kind": "anchor", "deleted_at": None}, {"anchor_date": 1}
+        ).to_list(2000)}
+        d = start
+        t = datetime.fromisoformat(today).date()
+        pauses = _anchor_pauses(user)
+        idx = 0
+        while d < t:
+            iso = d.isoformat()
+            if iso not in existing_dates and (t - d).days <= ANCHOR_MAX_MISSED_DAYS and not any(a <= d <= b for a, b in pauses):
+                chunk = sample[idx: idx + size]
+                idx += size
+                if chunk:
+                    ghost_qs = [dict(q, id=str(uuid.uuid4())) for q in chunk]
+                    ghost = {
+                        "id": str(uuid.uuid4()), "owner_id": user["id"], "folder_id": None,
+                        "title": "Ancrage manqué", "kind": "anchor", "anchor_date": iso,
+                        "answered_ids": [], "questions": ghost_qs,
+                        "created_at": datetime.now(timezone.utc).isoformat(), "deleted_at": None,
+                    }
+                    await db.quizzes.insert_one(ghost)
+                    for gq in ghost_qs:
+                        questions.append(dict(gq, src_quiz_id=ghost["id"], src_question_id=gq["id"]))
+                else:
+                    # plus de questions disponibles : jour marqué comme vide pour ne plus le compter
+                    await db.quizzes.insert_one({
+                        "id": str(uuid.uuid4()), "owner_id": user["id"], "folder_id": None,
+                        "title": "Ancrage manqué", "kind": "anchor", "anchor_date": iso,
+                        "answered_ids": [], "questions": [], "backlog_cleared": True,
+                        "created_at": datetime.now(timezone.utc).isoformat(), "deleted_at": None,
+                    })
+            d += timedelta(days=1)
+
+    if not questions:
+        raise HTTPException(status_code=400, detail="Aucun retard à rattraper.")
+
+    quiz_questions = []
+    for q in questions:
+        nq = dict(q)
+        nq["id"] = str(uuid.uuid4())
+        quiz_questions.append(nq)
+
+    quiz = {
+        "id": str(uuid.uuid4()),
+        "owner_id": user["id"],
+        "folder_id": None,
+        "title": "Ancrages en retard",
+        "kind": "anchor_backlog",
+        "anchor_date": today,
+        "answered_ids": [],
+        "questions": quiz_questions,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "deleted_at": None,
+    }
+    await db.quizzes.insert_one(quiz)
+    return clean(quiz)
+
+
+class AnchorPauseIn(BaseModel):
+    days: int = Field(ge=1, le=120)
+
+
+@api_router.post("/anchor/pause")
+async def anchor_pause(data: AnchorPauseIn, user: dict = Depends(current_user)):
+    """Suspend les ancrages pendant N jours (aujourd'hui inclus) : aucun retard ne s'accumule."""
+    t = paris_today()
+    end = t + timedelta(days=data.days - 1)
+    pauses = [p for p in (user.get("anchor_pauses") or []) if p.get("end", "") < t.isoformat()]
+    pauses.append({"start": t.isoformat(), "end": end.isoformat()})
+    await db.users.update_one({"id": user["id"]}, {"$set": {"anchor_pauses": pauses}})
+    return {"paused": True, "paused_until": end.isoformat()}
+
+
+@api_router.post("/anchor/resume")
+async def anchor_resume(user: dict = Depends(current_user)):
+    """Reprend les ancrages tout de suite (met fin à la pause en cours)."""
+    t = paris_today()
+    new = []
+    for p in user.get("anchor_pauses") or []:
+        try:
+            a = datetime.fromisoformat(p["start"]).date()
+            b = datetime.fromisoformat(p["end"]).date()
+        except Exception:
+            continue
+        if a <= t <= b:
+            b = t - timedelta(days=1)
+            if b < a:
+                continue
+            p = {"start": a.isoformat(), "end": b.isoformat()}
+        new.append(p)
+    await db.users.update_one({"id": user["id"]}, {"$set": {"anchor_pauses": new}})
+    return {"paused": False}
+
+
+@api_router.post("/anchor/backlog/reset")
+async def anchor_backlog_reset(user: dict = Depends(current_user)):
+    """Efface le retard : l'historique des ancrages passés ne compte plus, on repart d'aujourd'hui."""
+    today = paris_today().isoformat()
+    await db.quizzes.update_many(
+        {"owner_id": user["id"], "kind": "anchor", "anchor_date": {"$lt": today}},
+        {"$set": {"backlog_cleared": True}},
+    )
+    await db.users.update_one({"id": user["id"]}, {"$set": {"anchor_start_date": today}})
+    return {"ok": True}
+
+
+async def _with_source_names(item: dict) -> dict:
+    """Ajoute 'source_names' (liste des cours utilisés), même pour les anciens QCM."""
+    if not item.get("source_names") and item.get("source_ids"):
+        srcs = await db.sources.find({"id": {"$in": item["source_ids"]}}).to_list(200)
+        by_id = {x["id"]: x.get("name") for x in srcs}
+        item["source_names"] = [by_id[i] for i in item["source_ids"] if by_id.get(i)]
+    item.setdefault("source_names", [])
+    return item
 
 
 @api_router.get("/quizzes")
@@ -1473,6 +1691,7 @@ async def list_quizzes(folder_id: str = Query(...), user: dict = Depends(current
         item = clean(qz)
         item["question_count"] = len(item.get("questions", []))
         item.pop("questions", None)
+        await _with_source_names(item)
         out.append(item)
     return out
 
@@ -1482,7 +1701,7 @@ async def get_quiz(quiz_id: str, user: dict = Depends(current_user)):
     qz = await db.quizzes.find_one({"id": quiz_id, "owner_id": user["id"], "deleted_at": None})
     if not qz:
         raise HTTPException(status_code=404, detail="QCM introuvable")
-    return clean(qz)
+    return await _with_source_names(clean(qz))
 
 
 @api_router.delete("/quizzes/{quiz_id}")
@@ -1560,6 +1779,17 @@ async def answer_question(data: AnswerIn, user: dict = Depends(current_user)):
     if not question:
         raise HTTPException(status_code=404, detail="Question introuvable")
     pts, disc = score_question(data.selected, question["correct"], question["options"])
+    if qz.get("kind") in ANCHOR_KINDS:
+        # Ancrages : les erreurs ne vont PAS dans "À revoir", elles alimentent seulement l'algorithme.
+        await update_question_stats(user["id"], question, pts)
+        await db.quizzes.update_one({"id": qz["id"]}, {"$addToSet": {"answered_ids": question["id"]}})
+        src_id = question.get("src_quiz_id")
+        if src_id and question.get("src_question_id"):
+            await db.quizzes.update_one(
+                {"id": src_id, "owner_id": user["id"]},
+                {"$addToSet": {"answered_ids": question["src_question_id"]}},
+            )
+        return {"points": pts, "discordance": disc, "correct": question["correct"]}
     if pts >= 1.0:
         await db.review_items.update_many(
             {"owner_id": user["id"], "question.q": question["q"], "resolved": False},
@@ -1605,9 +1835,11 @@ async def submit_quiz(data: SubmitIn, user: dict = Depends(current_user)):
                 "discordance": disc,
             }
         )
-        if pts < 1.0:
-            review_added += 1
-        await update_question_stats(user["id"], question, pts)
+        if qz.get("kind") not in ANCHOR_KINDS:
+            # Ancrages : tout est déjà compté question par question (/quizzes/answer), rien dans "À revoir".
+            if pts < 1.0:
+                review_added += 1
+            await update_question_stats(user["id"], question, pts)
 
     n = len(qz.get("questions", [])) or 1
     grade_on_20 = round((total / n) * 20, 2)
