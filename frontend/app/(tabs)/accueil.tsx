@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useRouter } from "expo-router";
-import { useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useMemo, useState } from "react";
+import { ActivityIndicator, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@react-native-vector-icons/ionicons";
 
@@ -23,6 +23,21 @@ type JEvent = {
   color: string;
 };
 
+type AnchorStatus = {
+  pool_size: number;
+  available: boolean;
+  done_today: boolean;
+  today_total: number;
+  today_remaining: number;
+  backlog: number;
+  paused: boolean;
+  paused_until: string | null;
+};
+
+function frDate(iso: string) {
+  return new Date(`${iso}T12:00:00`).toLocaleDateString("fr-FR");
+}
+
 export default function Accueil() {
   const styles = useStyles();
   const { colors } = useTheme();
@@ -38,11 +53,46 @@ export default function Accueil() {
   const anchorSize = user?.anchor_size ?? 40;
   const bottomChrome = usesNativeTabs ? insets.bottom : 0;
 
+  const [showChoice, setShowChoice] = useState(false);
+
+  const statusQ = useQuery({
+    queryKey: ["anchor-status"],
+    queryFn: () => apiFetch<AnchorStatus>("/anchor/status"),
+    enabled: anchorEnabled,
+  });
+  // Recharge les compteurs à chaque retour sur l'accueil (après une session d'ancrage par exemple).
+  useFocusEffect(
+    useCallback(() => {
+      if (anchorEnabled) statusQ.refetch();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [anchorEnabled]),
+  );
+  const st = statusQ.data;
+  const backlog = st?.backlog ?? 0;
+  const paused = !!st?.paused;
+  const todayCount = st ? st.today_remaining : anchorSize;
+
   const anchor = useMutation({
     mutationFn: () => apiFetch<{ id: string }>("/anchor/daily", { body: {} }),
     onSuccess: (quiz) => router.push(`/quiz/play?quizId=${quiz.id}`),
     onError: (e: any) => toast.show(e.message, "error"),
   });
+
+  const backlogQuiz = useMutation({
+    mutationFn: () => apiFetch<{ id: string }>("/anchor/backlog", { body: {} }),
+    onSuccess: (quiz) => router.push(`/quiz/play?quizId=${quiz.id}`),
+    onError: (e: any) => toast.show(e.message, "error"),
+  });
+
+  const onAnchorPress = () => {
+    if (anchor.isPending || backlogQuiz.isPending) return;
+    if (paused) {
+      toast.show(`Ancrages suspendus jusqu'au ${frDate(st!.paused_until!)}`, "error");
+      return;
+    }
+    if (backlog > 0) setShowChoice(true);
+    else anchor.mutate();
+  };
 
   const todayEventsQ = useQuery({
     queryKey: ["j-events-today", ymd(today)],
@@ -65,10 +115,10 @@ export default function Accueil() {
     <Pressable
       testID="anchor-card"
       style={({ pressed }) => [styles.anchorCard, pressed && styles.pressed]}
-      onPress={() => !anchor.isPending && anchor.mutate()}
+      onPress={onAnchorPress}
     >
       <View style={styles.anchorIcon}>
-        {anchor.isPending ? (
+        {anchor.isPending || backlogQuiz.isPending ? (
           <ActivityIndicator color={colors.onBrandSecondary} />
         ) : (
           <Ionicons
@@ -81,7 +131,16 @@ export default function Accueil() {
       </View>
       <View style={{ flex: 1 }}>
         <Text style={styles.anchorTitle}>Ancrage du jour</Text>
-        <Text style={styles.anchorSub}>{anchorSize} QCM tirés au hasard dans toutes vos matières</Text>
+        {paused ? (
+          <Text style={styles.anchorSub}>Suspendu jusqu'au {frDate(st!.paused_until!)}</Text>
+        ) : (
+          <>
+            <Text style={styles.anchorSub}>
+              {todayCount > 0 ? `${todayCount} QCM du jour` : "Ancrage du jour terminé ✓"}
+            </Text>
+            {backlog > 0 ? <Text style={styles.anchorBacklog}>+ {backlog} QCM de retard</Text> : null}
+          </>
+        )}
       </View>
       <Ionicons name="play-circle" size={30} color="#000" />
     </Pressable>
@@ -149,6 +208,38 @@ export default function Accueil() {
           )}
         </Pressable>
       </ScrollView>
+
+      <Modal visible={showChoice} transparent animationType="fade" onRequestClose={() => setShowChoice(false)}>
+        <Pressable style={styles.choiceBackdrop} onPress={() => setShowChoice(false)} />
+        <View style={styles.choiceWrap} pointerEvents="box-none">
+          <View style={styles.choiceSheet}>
+            <Text style={styles.choiceTitle}>Quel ancrage ?</Text>
+            <Pressable
+              style={styles.choiceBtnRed}
+              onPress={() => {
+                setShowChoice(false);
+                backlogQuiz.mutate();
+              }}
+              testID="anchor-choice-backlog"
+            >
+              <Text style={styles.choiceBtnRedText}>Rattraper le retard ({backlog} QCM)</Text>
+            </Pressable>
+            <Pressable
+              style={styles.choiceBtn}
+              onPress={() => {
+                setShowChoice(false);
+                anchor.mutate();
+              }}
+              testID="anchor-choice-daily"
+            >
+              <Text style={styles.choiceBtnText}>Ancrage du jour ({todayCount} QCM)</Text>
+            </Pressable>
+            <Pressable onPress={() => setShowChoice(false)} style={{ marginTop: 6 }}>
+              <Text style={styles.choiceCancel}>Annuler</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -168,6 +259,16 @@ const useStyles = makeStyles((colors) => ({
     minHeight: 170,
   },
   pressed: { opacity: 0.7 },
+  anchorBacklog: { fontSize: 14, fontFamily: fonts.extrabold, color: "#DC2626", marginTop: 4 },
+  choiceBackdrop: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(15,23,42,0.45)" },
+  choiceWrap: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
+  choiceSheet: { backgroundColor: colors.surface, borderRadius: 20, padding: 24, width: "100%", maxWidth: 420, gap: 10 },
+  choiceTitle: { fontSize: 18, fontFamily: fonts.extrabold, color: colors.onSurface, textAlign: "center", marginBottom: 8 },
+  choiceBtn: { backgroundColor: colors.brandPrimary, borderRadius: 14, paddingVertical: 14, alignItems: "center" },
+  choiceBtnText: { fontSize: 15, fontFamily: fonts.bold, color: colors.onBrandPrimary },
+  choiceBtnRed: { backgroundColor: "#FEE2E2", borderRadius: 14, paddingVertical: 14, alignItems: "center", borderWidth: 1, borderColor: "#DC2626" },
+  choiceBtnRedText: { fontSize: 15, fontFamily: fonts.bold, color: "#DC2626" },
+  choiceCancel: { textAlign: "center", fontSize: 14, fontFamily: fonts.semibold, color: colors.muted },
   anchorIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: "rgba(255,255,255,0.15)", alignItems: "center", justifyContent: "center" },
   anchorTitle: { fontSize: 17, fontFamily: fonts.extrabold, color: colors.onSurface },
   anchorSub: { fontSize: 13, fontFamily: fonts.regular, color: colors.muted, marginTop: 2 },
