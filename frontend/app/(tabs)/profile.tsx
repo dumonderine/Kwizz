@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import { Modal, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
@@ -19,6 +19,17 @@ type Attempt = { id: string; title: string; grade_on_20: number; max_points: num
 
 const HOURS = [7, 8, 9, 12, 18, 20, 21];
 const ANCHOR_SIZES = [10, 20, 30, 40, 60, 80, 100];
+const PAUSE_OPTIONS: { days: number; label: string }[] = [
+  { days: 3, label: "3 jours" },
+  { days: 7, label: "1 semaine" },
+  { days: 14, label: "2 semaines" },
+  { days: 30, label: "1 mois" },
+  { days: 60, label: "2 mois" },
+];
+
+function frDate(iso: string) {
+  return new Date(`${iso}T12:00:00`).toLocaleDateString("fr-FR");
+}
 
 function fmt(n: number) {
   return Number.isInteger(n) ? `${n}` : n.toFixed(1).replace(".", ",");
@@ -32,6 +43,8 @@ export default function Profile() {
   const { user, signOut, updateProfile, refreshUser } = useAuth();
   const toast = useToast();
   const bottomChrome = usesNativeTabs ? insets.bottom : 0;
+  const qc = useQueryClient();
+  const [showReset, setShowReset] = useState(false);
   const [showPreset, setShowPreset] = useState(false);
   const [presetName, setPresetName] = useState("");
   const [presetOffsets, setPresetOffsets] = useState<number[]>(DEFAULT_J_OFFSETS);
@@ -57,6 +70,39 @@ export default function Profile() {
   const delPreset = useMutation({
     mutationFn: (pid: string) => apiFetch(`/j/presets/${pid}`, { method: "DELETE" }),
     onSuccess: () => refreshUser(),
+  });
+
+  const anchorStatusQ = useQuery({
+    queryKey: ["anchor-status"],
+    queryFn: () => apiFetch<{ paused: boolean; paused_until: string | null; backlog: number }>("/anchor/status"),
+    enabled: user?.anchor_enabled !== false,
+  });
+  const anchorPaused = !!anchorStatusQ.data?.paused;
+
+  const pauseAnchor = useMutation({
+    mutationFn: (days: number) => apiFetch("/anchor/pause", { body: { days } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["anchor-status"] });
+      toast.show("Ancrages suspendus", "success");
+    },
+    onError: (e: any) => toast.show(e.message, "error"),
+  });
+  const resumeAnchor = useMutation({
+    mutationFn: () => apiFetch("/anchor/resume", { body: {} }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["anchor-status"] });
+      toast.show("Ancrages repris", "success");
+    },
+    onError: (e: any) => toast.show(e.message, "error"),
+  });
+  const resetAnchor = useMutation({
+    mutationFn: () => apiFetch("/anchor/backlog/reset", { body: {} }),
+    onSuccess: () => {
+      setShowReset(false);
+      qc.invalidateQueries({ queryKey: ["anchor-status"] });
+      toast.show("Historique des ancrages supprimé", "success");
+    },
+    onError: (e: any) => toast.show(e.message, "error"),
   });
 
   const { data: attempts } = useQuery({
@@ -160,6 +206,54 @@ export default function Profile() {
                   })}
                 </View>
               </View>
+              <View style={styles.settingDivider} />
+              <View style={styles.settingCol}>
+                <Text style={styles.settingTitle}>Mettre les ancrages en pause</Text>
+                {anchorPaused && anchorStatusQ.data?.paused_until ? (
+                  <>
+                    <Text style={styles.settingSub}>
+                      Suspendus jusqu'au {frDate(anchorStatusQ.data.paused_until)} : aucun retard ne s'accumule.
+                    </Text>
+                    <View style={{ height: 10 }} />
+                    <Button
+                      title="Reprendre maintenant"
+                      variant="outline"
+                      onPress={() => resumeAnchor.mutate()}
+                      loading={resumeAnchor.isPending}
+                      testID="anchor-resume"
+                    />
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.settingSub}>Vacances, examens… pendant combien de temps ?</Text>
+                    <View style={styles.chipRow}>
+                      {PAUSE_OPTIONS.map((o) => (
+                        <Pressable
+                          key={o.days}
+                          style={styles.chip}
+                          onPress={() => pauseAnchor.mutate(o.days)}
+                          disabled={pauseAnchor.isPending}
+                          testID={`anchor-pause-${o.days}`}
+                        >
+                          <Text style={styles.chipText}>{o.label}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </>
+                )}
+              </View>
+              <View style={styles.settingDivider} />
+              <View style={styles.settingCol}>
+                <Text style={styles.settingTitle}>Supprimer mon historique des ancrages</Text>
+                <Text style={styles.settingSub}>Efface le retard accumulé et repart de zéro aujourd'hui.</Text>
+                <View style={{ height: 10 }} />
+                <Button
+                  title="Supprimer l'historique"
+                  variant="outline"
+                  onPress={() => setShowReset(true)}
+                  testID="anchor-reset"
+                />
+              </View>
             </>
           ) : null}
         </View>
@@ -239,6 +333,26 @@ export default function Profile() {
         <View style={{ height: 8 }} />
         <Button title="Se déconnecter" variant="outline" icon="log-out-outline" onPress={logout} testID="logout-button" />
       </ScrollView>
+
+      <Modal visible={showReset} transparent animationType="fade" onRequestClose={() => setShowReset(false)}>
+        <Pressable style={styles.backdrop} onPress={() => setShowReset(false)} />
+        <View style={styles.sheet}>
+          <View style={styles.handle} />
+          <Text style={styles.sheetTitle}>Supprimer l'historique ?</Text>
+          <Text style={[styles.settingSub, { marginBottom: 16 }]}>
+            Le retard accumulé sera effacé. Tes QCM et tes progrès par question sont conservés.
+          </Text>
+          <Button
+            title="Oui, supprimer"
+            onPress={() => resetAnchor.mutate()}
+            loading={resetAnchor.isPending}
+            testID="anchor-reset-confirm"
+          />
+          <Pressable onPress={() => setShowReset(false)} style={{ marginTop: 14 }}>
+            <Text style={[styles.settingSub, { textAlign: "center" }]}>Annuler</Text>
+          </Pressable>
+        </View>
+      </Modal>
 
       <Modal visible={showPreset} transparent animationType="slide" onRequestClose={() => setShowPreset(false)}>
         <Pressable style={styles.backdrop} onPress={() => setShowPreset(false)} />
