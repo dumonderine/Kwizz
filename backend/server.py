@@ -1342,7 +1342,13 @@ async def update_question_stats(user_id: str, question: dict, pts: float):
     now = datetime.now(timezone.utc).isoformat()
     existing = await db.question_stats.find_one({"owner_id": user_id, "question_key": key})
     if existing:
-        new_streak = existing.get("correct_streak", 0) + 1 if pts >= 1.0 else 0
+        old_streak = existing.get("correct_streak", 0)
+        if pts >= 1.0:
+            new_streak = old_streak + 1
+        elif pts >= 0.5:
+            new_streak = max(0, old_streak - 1)  # à moitié juste : on recule d'un cran seulement
+        else:
+            new_streak = 0
         await db.question_stats.update_one(
             {"id": existing["id"]},
             {"$set": {"correct_streak": new_streak, "last_seen_at": now}, "$inc": {"times_seen": 1}},
@@ -1438,13 +1444,25 @@ async def _anchor_pool(user_id: str) -> List[dict]:
     ).to_list(1000)
     pool: List[dict] = []
     seen = set()
+    metas: Dict[Any, dict] = {}
     for qz in quizzes:
+        fid = qz.get("folder_id")
+        if fid not in metas:
+            metas[fid] = await folder_meta(fid)
+        origin = metas[fid]
         for question in qz.get("questions", []):
             key = question.get("q", "")
             if not key or key in seen:
                 continue
             seen.add(key)
-            pool.append(question)
+            # Chapitre d'origine : affiché en petit dans l'ancrage pour retrouver le bon cours.
+            pool.append(dict(
+                question,
+                origin_folder_id=question.get("origin_folder_id", origin["folder_id"]),
+                origin_folder_name=question.get("origin_folder_name", origin["folder_name"]),
+                origin_topic_folder_id=question.get("origin_topic_folder_id", origin["topic_folder_id"]),
+                origin_topic_name=question.get("origin_topic_name", origin["topic_name"]),
+            ))
     return pool
 
 
@@ -1453,6 +1471,8 @@ async def _anchor_backlog_state(user: dict, today_iso: str):
     past = await db.quizzes.find({
         "owner_id": user["id"], "kind": "anchor", "deleted_at": None,
         "anchor_date": {"$lt": today_iso}, "backlog_cleared": {"$ne": True},
+        # Les anciens ancrages (avant cette fonction) n'ont pas de suivi : ils ne comptent pas comme retard.
+        "answered_ids": {"$exists": True},
     }).to_list(500)
     unanswered: List[dict] = []
     for qz in past:
