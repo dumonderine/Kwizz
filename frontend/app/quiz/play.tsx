@@ -19,6 +19,9 @@ type Question = {
   options: Record<string, string>;
   correct: string[];
   explanation: string;
+  origin_folder_id?: string | null;
+  origin_folder_name?: string | null;
+  origin_topic_name?: string | null;
 };
 type Quiz = { id: string; title: string; kind: string; folder_id: string | null; questions: Question[]; source_names?: string[] };
 type SubmitResult = {
@@ -582,6 +585,22 @@ export default function QuizPlay() {
         <Text style={styles.question} testID="question-text">
           {current.q}
         </Text>
+        {current.origin_folder_id && current.origin_folder_name && current.origin_folder_name !== "Général" ? (
+          <Pressable
+            style={styles.originRow}
+            onPress={() => router.push(`/folder/${current.origin_folder_id}`)}
+            hitSlop={8}
+            testID="question-origin"
+          >
+            <Ionicons name="book-outline" size={13} color={colors.muted} />
+            <Text style={styles.originText} numberOfLines={1}>
+              {current.origin_topic_name && current.origin_topic_name !== current.origin_folder_name
+                ? `${current.origin_topic_name} › ${current.origin_folder_name}`
+                : current.origin_folder_name}
+              {"  ·  ouvrir le cours"}
+            </Text>
+          </Pressable>
+        ) : null}
 
         <View style={{ gap: 10, marginTop: 16 }}>
           {letters.map((l) => (
@@ -764,6 +783,8 @@ const useStyles = makeStyles((colors) => ({
   progressTrack: { height: 8, borderRadius: 4, backgroundColor: colors.surfaceTertiary, overflow: "hidden" },
   progressFill: { height: 8, borderRadius: 4, backgroundColor: colors.brandPrimary },
 
+  originRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 8 },
+  originText: { flexShrink: 1, fontSize: 12, fontFamily: fonts.semibold, color: colors.muted, textDecorationLine: "underline" },
   question: { fontSize: 19, fontFamily: fonts.bold, color: colors.onSurface, lineHeight: 27 },
 
   opt: {
